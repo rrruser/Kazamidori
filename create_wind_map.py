@@ -5,39 +5,27 @@ import urllib3
 import pandas as pd
 import folium
 import fitdecode
+import fitdecode.utils
+
+# fitdecode 内部の CRC 計算処理をダミー関数に置き換えて計算時間をゼロ化
+fitdecode.utils.compute_crc = lambda chunk, crc=0: crc
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（無駄なフィールド変換を全スキップ） ---
+# --- 1. FITファイルのストリーミング読み込み＆超高速抽出 ---
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 30  # 30レコード毎に1件抽出し、全体で数億回の計算を削減
+    sample_rate = 50  # 50レコード毎に1件抽出（処理量を1/50に削減）
 
-    # CRC検証無効化の設定
-    crc_never = None
-    if hasattr(fitdecode, 'CrcCheck') and hasattr(fitdecode.CrcCheck, 'NEVER'):
-        crc_never = fitdecode.CrcCheck.NEVER
-    elif hasattr(fitdecode, 'FIT_CRC_CHECK_NEVER'):
-        crc_never = fitdecode.FIT_CRC_CHECK_NEVER
-
-    reader_kwargs = {}
-    if crc_never is not None:
-        reader_kwargs['check_crc'] = crc_never
-
-    # FitProcessor() を指定して _apply_scale_offset 等の重い自動変換処理を完全にスキップ
-    if hasattr(fitdecode, 'FitProcessor'):
-        reader_kwargs['processor'] = fitdecode.FitProcessor()
-
-    with fitdecode.FitReader(file_path, **reader_kwargs) as fit:
+    with fitdecode.FitReader(file_path) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
                 count += 1
                 if count % sample_rate != 0:
                     continue
 
-                # 生データ（semicircles）を直接取得
                 lat = frame.get_value('position_lat', fallback=None)
                 lon = frame.get_value('position_long', fallback=None)
                 ts = frame.get_value('timestamp', fallback=None)
