@@ -9,13 +9,13 @@ import fitdecode
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（安全なCRC処理＋最適化） ---
+# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（無駄なフィールド変換を全スキップ） ---
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 20  # 20レコード毎に1件抽出し、処理負荷をさらに軽減
+    sample_rate = 30  # 30レコード毎に1件抽出し、全体で数億回の計算を削減
 
-    # CrcCheckEnum の安全な取得（AttributeError / AssertionError を回避）
+    # CRC検証無効化の設定
     crc_never = None
     if hasattr(fitdecode, 'CrcCheck') and hasattr(fitdecode.CrcCheck, 'NEVER'):
         crc_never = fitdecode.CrcCheck.NEVER
@@ -26,6 +26,10 @@ def load_fit_data(file_path):
     if crc_never is not None:
         reader_kwargs['check_crc'] = crc_never
 
+    # FitProcessor() を指定して _apply_scale_offset 等の重い自動変換処理を完全にスキップ
+    if hasattr(fitdecode, 'FitProcessor'):
+        reader_kwargs['processor'] = fitdecode.FitProcessor()
+
     with fitdecode.FitReader(file_path, **reader_kwargs) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
@@ -33,6 +37,7 @@ def load_fit_data(file_path):
                 if count % sample_rate != 0:
                     continue
 
+                # 生データ（semicircles）を直接取得
                 lat = frame.get_value('position_lat', fallback=None)
                 lon = frame.get_value('position_long', fallback=None)
                 ts = frame.get_value('timestamp', fallback=None)
