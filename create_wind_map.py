@@ -9,20 +9,20 @@ import fitdecode
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルのストリーミング読み込み＆高速抽出（fitdecode使用） ---
+# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（型安全チェック追加） ---
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 10  # 10レコード毎に1件のみ抽出して処理量を1/10に軽量化
+    sample_rate = 10  # 10レコード毎に1件のみ抽出して処理量を軽量化
 
     with fitdecode.FitReader(file_path) as fit:
         for frame in fit:
-            if frame.is_data and frame.name == 'record':
+            # FitDataMessage 型かつ name が 'record' の場合のみ処理
+            if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
                 count += 1
                 if count % sample_rate != 0:
                     continue
 
-                # 緯度・経度・時刻の取得
                 lat = frame.get_value('position_lat', fallback=None)
                 lon = frame.get_value('position_long', fallback=None)
                 ts = frame.get_value('timestamp', fallback=None)
