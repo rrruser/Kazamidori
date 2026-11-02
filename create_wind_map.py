@@ -1,43 +1,38 @@
-import io
 import math
 import datetime
 import requests
 import urllib3
 import pandas as pd
 import folium
-from garmin_fit_sdk import Decoder, Stream
+import fitdecode
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルの読み込みと超高速抽出（BytesIO使用） ---
+# --- 1. FITファイルのストリーミング読み込み＆高速抽出（fitdecode使用） ---
 def load_fit_data(file_path):
-    with open(file_path, 'rb') as f:
-        file_bytes = f.read()
-
-    # io.BytesIO を経由して Stream.from_bytes_io を呼び出し
-    stream = Stream.from_bytes_io(io.BytesIO(file_bytes))
-    decoder = Decoder(stream)
-    messages, errors = decoder.read()
-
-    record_mesgs = messages.get('record_mesgs', [])
-
-    # 抽出時点で約500ポイント程度に間引き（即時スライス）
-    step = max(1, len(record_mesgs) // 500)
-    sampled_records = record_mesgs[::step]
-
     records = []
-    for record in sampled_records:
-        lat = record.get('position_lat')
-        lon = record.get('position_long')
-        ts = record.get('timestamp')
+    count = 0
+    sample_rate = 10  # 10レコード毎に1件のみ抽出して処理量を1/10に軽量化
 
-        if lat is not None and lon is not None and ts is not None:
-            records.append({
-                'timestamp': ts,
-                'lat': lat * (180 / 2**31),
-                'lon': lon * (180 / 2**31)
-            })
+    with fitdecode.FitReader(file_path) as fit:
+        for frame in fit:
+            if frame.is_data and frame.name == 'record':
+                count += 1
+                if count % sample_rate != 0:
+                    continue
+
+                # 緯度・経度・時刻の取得
+                lat = frame.get_value('position_lat', fallback=None)
+                lon = frame.get_value('position_long', fallback=None)
+                ts = frame.get_value('timestamp', fallback=None)
+
+                if lat is not None and lon is not None and ts is not None:
+                    records.append({
+                        'timestamp': ts,
+                        'lat': lat * (180 / 2**31),
+                        'lon': lon * (180 / 2**31)
+                    })
 
     df = pd.DataFrame(records)
     if not df.empty:
