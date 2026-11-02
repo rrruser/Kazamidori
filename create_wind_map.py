@@ -1,3 +1,4 @@
+import io
 import math
 import datetime
 import requests
@@ -9,19 +10,19 @@ from garmin_fit_sdk import Decoder, Stream
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルの読み込みと超高速抽出（メモリ直接読み込み＆即時サンプリング） ---
+# --- 1. FITファイルの読み込みと超高速抽出（BytesIO使用） ---
 def load_fit_data(file_path):
-    # ファイルを一気にメモリ（bytes）へ読み込んでディスクI/Oボトルネックを解消
     with open(file_path, 'rb') as f:
         file_bytes = f.read()
 
-    stream = Stream.from_bytes(file_bytes)
+    # io.BytesIO を経由して Stream.from_bytes_io を呼び出し
+    stream = Stream.from_bytes_io(io.BytesIO(file_bytes))
     decoder = Decoder(stream)
     messages, errors = decoder.read()
 
     record_mesgs = messages.get('record_mesgs', [])
 
-    # 抽出時点で間引きを行い、メモリ消費とループ処理を最小化 (全体で約500ポイント程度に最適化)
+    # 抽出時点で約500ポイント程度に間引き（即時スライス）
     step = max(1, len(record_mesgs) // 500)
     sampled_records = record_mesgs[::step]
 
