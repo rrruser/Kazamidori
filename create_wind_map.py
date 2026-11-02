@@ -10,11 +10,15 @@ import fitdecode.utils
 # 1. CRC計算処理をダミー化して計算時間をゼロ化
 fitdecode.utils.compute_crc = lambda chunk, crc=0: crc
 
-# 2. 重いフィールド変換処理（on_process_unit）を全無視する超軽量プロセッサ
-class FastProcessor(fitdecode.FitProcessor):
-    def on_process_unit(self, reader, unit):
+# 2. 親クラスを継承せず独立したダミープロセッサとして定義（インポートエラー回避）
+class FastProcessor:
+    def on_process_header(self, reader, header):
         pass
     def on_process_message(self, reader, message):
+        pass
+    def on_process_unit(self, reader, unit):
+        pass
+    def on_process_crc(self, reader, crc):
         pass
 
 # SSL検証無効化時の警告表示を抑止
@@ -24,9 +28,8 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 50  # 50レコード毎に1件抽出し、全体で処理量を1/50に削減
+    sample_rate = 50  # 50レコード毎に1件抽出
 
-    # FastProcessor() を指定して fitdecode 内部の重い処理を完全にパス
     with fitdecode.FitReader(file_path, processor=FastProcessor()) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
