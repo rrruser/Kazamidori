@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FIT Wind Map Viewer</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: "Helvetica Neue", Arial, sans-serif; background-color: #f4f6f8; color: #333; padding: 20px; }
+        .container { max-width: 1100px; margin: 0 auto; }
+        h1 { font-size: 24px; margin-bottom: 20px; text-align: center; color: #1a252f; }
+
+        /* ドラッグ＆ドロップエリア */
+        .drop-zone {
+            border: 2px dashed #3498db;
+            border-radius: 12px;
+            background-color: #ffffff;
+            padding: 40px 20px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+        }
+        .drop-zone.dragover {
+            background-color: #ebf5fb;
+            border-color: #2980b9;
+            transform: scale(1.01);
+        }
+        .drop-zone p { font-size: 16px; color: #555; margin-bottom: 10px; }
+        .drop-zone span { font-size: 12px; color: #888; }
+        #fileInput { display: none; }
+
+        /* ステータス & ローディング */
+        .status-message {
+            margin-top: 15px;
+            text-align: center;
+            font-size: 14px;
+            font-weight: bold;
+            display: none;
+        }
+        .status-message.loading { color: #d35400; }
+        .status-message.error { color: #c0392b; }
+
+        /* マップ表示コンテナ */
+        .map-container {
+            margin-top: 25px;
+            background: #fff;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            display: none;
+            height: 650px;
+        }
+        iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>🚴‍♂️ FIT サイクリング風向可視化マップ</h1>
+
+    <!-- ドロップゾーン -->
+    <div class="drop-zone" id="dropZone">
+        <p>ここに <strong>FITファイル (.fit)</strong> をドラッグ＆ドロップ</p>
+        <span>またはクリックしてファイルを選択</span>
+        <input type="file" id="fileInput" accept=".fit">
+    </div>
+
+    <!-- 処理状態インジケータ -->
+    <div class="status-message" id="statusMsg"></div>
+
+    <!-- マップ表示エリア -->
+    <div class="map-container" id="mapContainer">
+        <iframe id="mapFrame" src=""></iframe>
+    </div>
+</div>
+
+<script>
+    const dropZone = document.getElementById('dropZone');
+    const fileInput = document.getElementById('fileInput');
+    const statusMsg = document.getElementById('statusMsg');
+    const mapContainer = document.getElementById('mapContainer');
+    const mapFrame = document.getElementById('mapFrame');
+
+    // クリックでファイルダイアログを開く
+    dropZone.addEventListener('click', () => fileInput.click());
+
+    // ドラッグオーバー時のエフェクト
+    ['dragenter', 'dragover'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        }, false);
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+        }, false);
+    });
+
+    // ファイルドロップ時の処理
+    dropZone.addEventListener('drop', (e) => {
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFileUpload(files[0]);
+        }
+    });
+
+    // ファイル選択時の処理
+    fileInput.addEventListener('change', (e) => {
+        if (fileInput.files.length > 0) {
+            handleFileUpload(fileInput.files[0]);
+        }
+    });
+
+    // 非同期アップロード処理 (Fetch API)
+    function handleFileUpload(file) {
+        if (!file.name.toLowerCase().endsWith('.fit')) {
+            showStatus('FITファイル（.fit）のみアップロード可能です。', 'error');
+            return;
+        }
+
+        showStatus('気象データを取得してマップを生成中... (数秒かかります)', 'loading');
+        mapContainer.style.display = 'none';
+
+        const formData = new FormData();
+        formData.append('file', file);
+
+        fetch('/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                showStatus('生成完了！', 'success');
+                setTimeout(() => { statusMsg.style.display = 'none'; }, 2000);
+
+                // iframe に生成されたマップをセット
+                mapFrame.src = data.map_url;
+                mapContainer.style.display = 'block';
+            } else {
+                showStatus(data.error || 'エラーが発生しました。', 'error');
+            }
+        })
+        .catch(error => {
+            showStatus('通信エラーが発生しました: ' + error, 'error');
+        });
+    }
+
+    function showStatus(msg, type) {
+        statusMsg.innerText = msg;
+        statusMsg.className = 'status-message ' + type;
+        statusMsg.style.display = 'block';
+    }
+</script>
+
+</body>
+</html>

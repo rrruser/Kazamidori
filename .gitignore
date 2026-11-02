@@ -1,0 +1,5 @@
+uploads/
+static/map_*.html
+__pycache__/
+*.pyc
+.env

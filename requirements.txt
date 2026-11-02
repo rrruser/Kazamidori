@@ -1,0 +1,7 @@
+Flask
+gunicorn
+fitparse
+pandas
+folium
+requests
+urllib3
