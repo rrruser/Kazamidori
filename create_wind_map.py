@@ -7,8 +7,15 @@ import folium
 import fitdecode
 import fitdecode.utils
 
-# fitdecode 内部の CRC 計算処理をダミー関数に置き換えて計算時間をゼロ化
+# 1. CRC計算処理をダミー化して計算時間をゼロ化
 fitdecode.utils.compute_crc = lambda chunk, crc=0: crc
+
+# 2. 重いフィールド変換処理（on_process_unit）を全無視する超軽量プロセッサ
+class FastProcessor(fitdecode.FitProcessor):
+    def on_process_unit(self, reader, unit):
+        pass
+    def on_process_message(self, reader, message):
+        pass
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -17,9 +24,10 @@ urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 50  # 50レコード毎に1件抽出（処理量を1/50に削減）
+    sample_rate = 50  # 50レコード毎に1件抽出し、全体で処理量を1/50に削減
 
-    with fitdecode.FitReader(file_path) as fit:
+    # FastProcessor() を指定して fitdecode 内部の重い処理を完全にパス
+    with fitdecode.FitReader(file_path, processor=FastProcessor()) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
                 count += 1
