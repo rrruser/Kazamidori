@@ -61,7 +61,7 @@
 <body>
 
 <div class="container">
-    <h1>🚴‍♂️ FIT サイクリング風向可視化マップ</h1>
+    <h1>🚴‍♂️ FITデータ風向可視化マップ</h1>
 
     <!-- ドロップゾーン -->
     <div class="drop-zone" id="dropZone">
@@ -119,40 +119,48 @@
         }
     });
 
-    // 非同期アップロード処理 (Fetch API)
-    function handleFileUpload(file) {
-        if (!file.name.toLowerCase().endsWith('.fit')) {
-            showStatus('FITファイル（.fit）のみアップロード可能です。', 'error');
-            return;
-        }
+	function handleFileUpload(file) {
+	    if (!file.name.toLowerCase().endsWith('.fit')) {
+	        showStatus('FITファイル（.fit）のみアップロード可能です。', 'error');
+	        return;
+	    }
 
-        showStatus('気象データを取得してマップを生成中... (数秒かかります)', 'loading');
-        mapContainer.style.display = 'none';
+	    showStatus('気象データを取得してマップを生成中... (数秒かかります)', 'loading');
+	    mapContainer.style.display = 'none';
 
-        const formData = new FormData();
-        formData.append('file', file);
+	    const formData = new FormData();
+	    formData.append('file', file);
 
-        fetch('/upload', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                showStatus('生成完了！', 'success');
-                setTimeout(() => { statusMsg.style.display = 'none'; }, 2000);
-
-                // iframe に生成されたマップをセット
-                mapFrame.src = data.map_url;
-                mapContainer.style.display = 'block';
-            } else {
-                showStatus(data.error || 'エラーが発生しました。', 'error');
-            }
-        })
-        .catch(error => {
-            showStatus('通信エラーが発生しました: ' + error, 'error');
-        });
-    }
+	    fetch('/upload', {
+	        method: 'POST',
+	        body: formData
+	    })
+	    .then(async response => {
+	        const contentType = response.headers.get('content-type');
+	        if (contentType && contentType.includes('application/json')) {
+	            const data = await response.json();
+	            if (!response.ok) {
+	                throw new Error(data.error || `HTTPエラー: ${response.status}`);
+	            }
+	            return data;
+	        } else {
+	            const text = await response.text();
+	            console.error('HTML Response received:', text);
+	            throw new Error(`サーバー内部エラー (${response.status})。RenderのLogsを確認してください。`);
+	        }
+	    })
+	    .then(data => {
+	        if (data.success) {
+	            showStatus('生成完了！', 'success');
+	            setTimeout(() => { statusMsg.style.display = 'none'; }, 2000);
+	            mapFrame.src = data.map_url;
+	            mapContainer.style.display = 'block';
+	        }
+	    })
+	    .catch(error => {
+	        showStatus('エラー: ' + error.message, 'error');
+	    });
+	}
 
     function showStatus(msg, type) {
         statusMsg.innerText = msg;
