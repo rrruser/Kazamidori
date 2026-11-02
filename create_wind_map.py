@@ -6,26 +6,28 @@ import pandas as pd
 import fitparse
 import folium
 
+
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # --- 1. FITファイルの読み込みと高速抽出（JST変換付き） ---
 def load_fit_data(file_path):
-    fitfile = fitparse.FitFile(file_path)
+    # check_crc=False で事前チェック処理をスキップ
+    fitfile = fitparse.FitFile(file_path, check_crc=False)
     records = []
 
     for record in fitfile.get_messages('record'):
-        data = {}
-        for record_data in record:
-            if record_data.name == 'timestamp':
-                data['timestamp'] = record_data.value
-            elif record_data.name == 'position_lat' and record_data.value is not None:
-                data['lat'] = record_data.value * (180 / 2**31)
-            elif record_data.name == 'position_long' and record_data.value is not None:
-                data['lon'] = record_data.value * (180 / 2**31)
+        # 内側ループを完全に廃止し、必要なフィールドのみピンポイント取得
+        lat = record.get_value('position_lat')
+        lon = record.get_value('position_lon')
+        ts = record.get_value('timestamp')
 
-        if 'lat' in data and 'lon' in data and 'timestamp' in data:
-            records.append(data)
+        if lat is not None and lon is not None and ts is not None:
+            records.append({
+                'timestamp': ts,
+                'lat': lat * (180 / 2**31),
+                'lon': lon * (180 / 2**31)
+            })
 
     df = pd.DataFrame(records)
     if not df.empty:
