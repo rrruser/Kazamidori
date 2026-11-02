@@ -3,24 +3,25 @@ import datetime
 import requests
 import urllib3
 import pandas as pd
-import fitparse
 import folium
-
+from garmin_fit_sdk import Decoder, Stream
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルの読み込みと高速抽出（JST変換付き） ---
+# --- 1. FITファイルの読み込みと超高速抽出（garmin-fit-sdk使用） ---
 def load_fit_data(file_path):
-    # check_crc=False で事前チェック処理をスキップ
-    fitfile = fitparse.FitFile(file_path, check_crc=False)
-    records = []
+    stream = Stream.from_file(file_path)
+    decoder = Decoder(stream)
+    messages, errors = decoder.read()
 
-    for record in fitfile.get_messages('record'):
-        # 内側ループを完全に廃止し、必要なフィールドのみピンポイント取得
-        lat = record.get_value('position_lat')
-        lon = record.get_value('position_lon')
-        ts = record.get_value('timestamp')
+    records = []
+    record_mesgs = messages.get('record_mesgs', [])
+
+    for record in record_mesgs:
+        lat = record.get('position_lat')
+        lon = record.get('position_long')
+        ts = record.get('timestamp')
 
         if lat is not None and lon is not None and ts is not None:
             records.append({
@@ -31,7 +32,10 @@ def load_fit_data(file_path):
 
     df = pd.DataFrame(records)
     if not df.empty:
-        df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC').dt.tz_convert('Asia/Tokyo')
+        df['timestamp'] = pd.to_datetime(df['timestamp'])
+        if df['timestamp'].dt.tz is None:
+            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
+        df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Tokyo')
 
     return df
 

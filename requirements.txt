@@ -1,6 +1,6 @@
 Flask
 gunicorn
-fitparse
+garmin-fit-sdk
 pandas
 folium
 requests
