@@ -9,14 +9,24 @@ import fitdecode
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（正しいCRCスキップ指定） ---
+# --- 1. FITファイルのストリーミング読み込み＆超高速抽出（安全なCRC処理＋最適化） ---
 def load_fit_data(file_path):
     records = []
     count = 0
-    sample_rate = 10  # 10レコード毎に1件抽出し、処理量を1/10に軽量化
+    sample_rate = 20  # 20レコード毎に1件抽出し、処理負荷をさらに軽減
 
-    # check_crc=fitdecode.FIT_CRC_NEVER で正しくCRC検証を無効化
-    with fitdecode.FitReader(file_path, check_crc=fitdecode.FIT_CRC_NEVER) as fit:
+    # CrcCheckEnum の安全な取得（AttributeError / AssertionError を回避）
+    crc_never = None
+    if hasattr(fitdecode, 'CrcCheck') and hasattr(fitdecode.CrcCheck, 'NEVER'):
+        crc_never = fitdecode.CrcCheck.NEVER
+    elif hasattr(fitdecode, 'FIT_CRC_CHECK_NEVER'):
+        crc_never = fitdecode.FIT_CRC_CHECK_NEVER
+
+    reader_kwargs = {}
+    if crc_never is not None:
+        reader_kwargs['check_crc'] = crc_never
+
+    with fitdecode.FitReader(file_path, **reader_kwargs) as fit:
         for frame in fit:
             if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
                 count += 1
