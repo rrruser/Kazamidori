@@ -514,7 +514,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     else:
         score_color = "#D32F2F"
 
-	# --- レイアウト切り替え用 CSS と HTML / JS ---
+    # --- レイアウト切り替え用 CSS と HTML / JS ---
     ui_layout_html = f"""
     <style>
         /* Leaflet の MAP 切り替えパネルを画面右上の最前面に配置 */
