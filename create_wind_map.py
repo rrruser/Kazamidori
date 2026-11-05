@@ -513,69 +513,149 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     else:
         score_color = "#D32F2F"
 
-    summary_html = f"""
-    <div style="position: fixed; top: 65px; right: 10px; width: 150px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #555555; z-index: 9999; font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3); font-family: sans-serif; line-height: 1.4;">
-        <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
-        <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
-        <b>平均風速:</b> {avg_wind:.1f} m/s<br>
-        <b>最大風速:</b> {max_wind:.1f} m/s<br>
-        <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
-        <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
-        <b>風向の内訳:</b><br>
-        <div style="display:flex; justify-content:space-between; margin-top:2px;"><span><i style="color:#D32F2F;">■</i> 向かい風:</span> <b>{head_pct:.0f}%</b></div>
-        <div style="display:flex; justify-content:space-between;"><span><i style="color:#FFFFFF; -webkit-text-stroke: 1px #888;">■</i> 横風/微風:</span> <b>{cross_pct:.0f}%</b></div>
-        <div style="display:flex; justify-content:space-between;"><span><i style="color:#1976D2;">■</i> 追い風:</span> <b>{tail_pct:.0f}%</b></div>
-        <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-            <b>風恩恵得点:</b>
-            <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
+	# --- レイアウト切り替え用 CSS と HTML / JS ---
+    ui_layout_html = f"""
+    <style>
+        /* モード 0: デフォルト (標準: 右上 & 左下) */
+        body.mode-0 #summary-panel {{
+            position: fixed; top: 65px; right: 10px; width: 150px;
+            background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
+            font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.4;
+        }}
+        body.mode-0 #legend-panel {{
+            position: fixed; bottom: 20px; left: 20px; width: 160px; height: auto;
+            background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
+            font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.4;
+        }}
+        body.mode-0 .view-vertical {{ display: block; }}
+        body.mode-0 .view-horizontal {{ display: none; }}
+
+        /* モード 1: 右側一括（縦並び） */
+        body.mode-1 #summary-panel {{
+            position: fixed; top: 65px; right: 10px; width: 150px;
+            background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
+            font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.4;
+        }}
+        body.mode-1 #legend-panel {{
+            position: fixed; top: 310px; right: 10px; left: auto; bottom: auto; width: 150px; height: auto;
+            background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
+            font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.4;
+        }}
+        body.mode-1 .view-vertical {{ display: block; }}
+        body.mode-1 .view-horizontal {{ display: none; }}
+
+        /* モード 2: 上下配置（2行以内コンパクト横長） */
+        body.mode-2 #summary-panel {{
+            position: fixed; top: 10px; left: 50px; right: 220px; width: auto;
+            background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
+            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.3;
+        }}
+        body.mode-2 #legend-panel {{
+            position: fixed; bottom: 10px; left: 10px; right: 10px; width: auto; height: auto;
+            background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
+            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.3;
+        }}
+        body.mode-2 .view-vertical {{ display: none; }}
+        body.mode-2 .view-horizontal {{ display: block; }}
+    </style>
+
+    <!-- RIDE SUMMARY パネル -->
+    <div id="summary-panel">
+        <!-- 縦表示モード -->
+        <div class="view-vertical">
+            <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
+            <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
+            <b>平均風速:</b> {avg_wind:.1f} m/s<br>
+            <b>最大風速:</b> {max_wind:.1f} m/s<br>
+            <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
+            <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
+            <b>風向の内訳:</b><br>
+            <div style="display:flex; justify-content:space-between; margin-top:2px;"><span><i style="color:#D32F2F;">■</i> 向かい風:</span> <b>{head_pct:.0f}%</b></div>
+            <div style="display:flex; justify-content:space-between;"><span><i style="color:#FFFFFF; -webkit-text-stroke: 1px #888;">■</i> 横風/微風:</span> <b>{cross_pct:.0f}%</b></div>
+            <div style="display:flex; justify-content:space-between;"><span><i style="color:#1976D2;">■</i> 追い風:</span> <b>{tail_pct:.0f}%</b></div>
+            <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
+            <div style="display:flex; justify-content:space-between; align-items:center;">
+                <b>風恩恵得点:</b>
+                <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
+            </div>
+        </div>
+
+        <!-- 横表示モード（2行構成） -->
+        <div class="view-horizontal">
+            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) &nbsp;|&nbsp; <b>平均:</b> {avg_wind:.1f}m/s &nbsp;|&nbsp; <b>最大:</b> {max_wind:.1f}m/s &nbsp;|&nbsp; <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> &nbsp;|&nbsp; <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+            <div style="margin-top:2px;"><b>風向内訳:</b> <span style="color:#D32F2F;">■</span>向かい風: <b>{head_pct:.0f}%</b> &nbsp;|&nbsp; <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風: <b>{cross_pct:.0f}%</b> &nbsp;|&nbsp; <span style="color:#1976D2;">■</span>追い風: <b>{tail_pct:.0f}%</b></div>
         </div>
     </div>
-    """
-    m.get_root().html.add_child(folium.Element(summary_html))
 
-    legend_html = """
-    <div style="position: fixed; bottom: 20px; left: 20px; width: 160px; height: 160px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid grey; z-index: 9999; font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif;">
-        <b>相対風向凡例 (実効風)</b><br>
-        <i style="background: #D32F2F; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強向かい風 (+2m/s〜)<br>
-        <i style="background: #FB8C00; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱向かい風 (+0.5m/s)<br>
-        <i style="background: #FFFFFF; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
-        <i style="background: #9CCC65; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
-        <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
-        <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
+    <!-- 相対風向凡例 パネル -->
+    <div id="legend-panel">
+        <!-- 縦表示モード -->
+        <div class="view-vertical">
+            <b>相対風向凡例 (実効風)</b><br>
+            <i style="background: #D32F2F; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強向かい風 (+2m/s〜)<br>
+            <i style="background: #FB8C00; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱向かい風 (+0.5m/s)<br>
+            <i style="background: #FFFFFF; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
+            <i style="background: #9CCC65; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
+            <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
+            <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
+        </div>
+
+        <!-- 横表示モード（2行構成） -->
+        <div class="view-horizontal">
+            <div><b>相対風向凡例 (実効風):</b> &nbsp; <i style="background:#D32F2F; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>強向かい風(+2m/s〜) &nbsp; <i style="background:#FB8C00; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>弱向かい風(+0.5m/s) &nbsp; <i style="background:#FFFFFF; border:1px solid #333; width:9px; height:9px; display:inline-block; margin-right:2px;"></i>横風/微風</div>
+            <div style="margin-top:2px;"><i style="background:#9CCC65; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>弱追い風(-0.5m/s) &nbsp; <i style="background:#2E7D32; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>追い風(-2.0m/s) &nbsp; <i style="background:#1976D2; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>強追い風(-3.5m/s〜)</div>
+        </div>
     </div>
-    """
-    m.get_root().html.add_child(folium.Element(legend_html))
 
-    png_btn_html = """
+    <!-- PNG保存 ＆ レイアウト切替ボタン -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
-    <div style="position: fixed; top: 20px; right: 60px; z-index: 9999;">
-        <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif;">📷 PNG画像として保存</button>
+    <div style="position: fixed; top: 20px; right: 60px; z-index: 9999; display: flex; gap: 8px;">
+        <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif;">📐 レイアウト: 標準</button>
+        <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif;">📷 PNG保存</button>
     </div>
+
     <script>
-    function saveAsPNG() {
+    // 初期モードの設定 (mode-0: 標準)
+    document.body.classList.add('mode-0');
+    let currentMode = 0;
+    const modeNames = ['標準', '右側集約', '上下コンパクト'];
+
+    function toggleLayout() {{
+        document.body.classList.remove('mode-' + currentMode);
+        currentMode = (currentMode + 1) % 3;
+        document.body.classList.add('mode-' + currentMode);
+        document.getElementById('layout-toggle-btn').innerText = '📐 レイアウト: ' + modeNames[currentMode];
+    }}
+
+    function saveAsPNG() {{
         const btn = document.getElementById('save-png-btn');
         const originalText = btn.innerText;
         btn.innerText = '画像生成中...';
         btn.disabled = true;
 
-        htmlToImage.toPng(document.body, { pixelRatio: 2 })
-            .then(function (dataUrl) {
+        htmlToImage.toPng(document.body, {{ pixelRatio: 2 }})
+            .then(function (dataUrl) {{
                 const link = document.createElement('a');
                 link.download = 'kazamidori_wind_map.png';
                 link.href = dataUrl;
                 link.click();
                 btn.innerText = originalText;
                 btn.disabled = false;
-            })
-            .catch(function (error) {
+            }})
+            .catch(function (error) {{
                 alert('画像の生成に失敗しました: ' + error);
                 btn.innerText = originalText;
                 btn.disabled = false;
-            });
-    }
+            }});
+    }}
     </script>
     """
-    m.get_root().html.add_child(folium.Element(png_btn_html))
+    m.get_root().html.add_child(folium.Element(ui_layout_html))
 
     m.save(output_html)
