@@ -369,7 +369,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         wheelPxPerZoomLevel=200
     )
 
-    # 全体が収まるよう自動ズーム範囲を設定
     min_lat, max_lat = df['lat'].min(), df['lat'].max()
     min_lon, max_lon = df['lon'].min(), df['lon'].max()
     m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=[30, 30])
@@ -386,8 +385,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         name="国土地理院 (写真)"
     ).add_to(m)
 
-	# collapsed=False を外し、ホバーで開く標準スタイルに戻します
-	folium.LayerControl().add_to(m)
+    folium.LayerControl().add_to(m)
 
     eff_headwinds = []
     headwind_count = 0
@@ -503,7 +501,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     cross_pct = (crosswind_count / total_segments) * 100
     tail_pct = (tailwind_count / total_segments) * 100
 
-    # --- 風恩恵得点 (0〜100点) の計算 ---
     wind_score = int(round(head_pct * 0.125 + cross_pct * 0.5 + tail_pct * 1.05))
     wind_score = max(0, min(100, wind_score))
 
@@ -514,27 +511,22 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     else:
         score_color = "#D32F2F"
 
-    # --- レイアウト切り替え用 CSS と HTML / JS ---
     ui_layout_html = f"""
     <style>
-        /* Leaflet の MAP 切り替えパネルを画面右上の最前面に配置 */
         .leaflet-top.leaflet-right {{
             top: 10px !important;
             z-index: 10000 !important;
         }}
 
-        /* MAP切り替えパネル (.leaflet-control-layers) にホバー中、自前ボタン群を非表示化 */
         body:has(.leaflet-control-layers:hover) #control-buttons {{
             opacity: 0;
             pointer-events: none;
         }}
 
-        /* ボタン群にスムーズなフェードアニメーションを設定 */
         #control-buttons {{
             transition: opacity 0.2s ease;
         }}
 
-        /* モード 0: 標準 (上下コンパクト配置) */
         body.mode-0 #summary-panel {{
             position: fixed; top: 10px; left: 50px; right: 250px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
@@ -550,7 +542,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         body.mode-0 .view-vertical {{ display: none; }}
         body.mode-0 .view-horizontal {{ display: block; }}
 
-        /* モード 1: 右側集約 (縦並び配置) */
         body.mode-1 #summary-panel {{
             position: fixed; top: 80px; right: 10px; width: 150px;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
@@ -566,13 +557,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         body.mode-1 .view-vertical {{ display: block; }}
         body.mode-1 .view-horizontal {{ display: none; }}
 
-        /* モード 2: 表示なし (完全非表示) */
         body.mode-2 #summary-panel,
         body.mode-2 #legend-panel {{
             display: none !important;
         }}
 
-        /* スマホ等画面サイズが小さい場合のレスポンシブ保護 */
         @media (max-width: 600px) {{
             body.mode-0 #summary-panel {{
                 left: 10px; right: 180px; font-size: 9px; padding: 3px 6px;
@@ -583,7 +572,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         }}
     </style>
 
-    <!-- RIDE SUMMARY パネル -->
     <div id="summary-panel">
         <div class="view-vertical">
             <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
@@ -609,7 +597,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
     </div>
 
-    <!-- 相対風向凡例 パネル -->
     <div id="legend-panel">
         <div class="view-vertical">
             <b>相対風向凡例 (実効風)</b><br>
@@ -617,7 +604,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <i style="background: #FB8C00; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱向かい風 (+0.5m/s)<br>
             <i style="background: #FFFFFF; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
             <i style="background: #9CCC65; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
-            <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
+            <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い风 (-2.0m/s)<br>
             <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
         </div>
 
@@ -632,7 +619,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
     </div>
 
-    <!-- PNG保存 ＆ レイアウト切替ボタン -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
     <div id="control-buttons" style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
