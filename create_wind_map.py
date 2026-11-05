@@ -386,7 +386,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         name="国土地理院 (写真)"
     ).add_to(m)
 
-    folium.LayerControl().add_to(m)
+	# collapsed=False を外し、ホバーで開く標準スタイルに戻します
+	folium.LayerControl().add_to(m)
 
     eff_headwinds = []
     headwind_count = 0
@@ -516,10 +517,21 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
 	# --- レイアウト切り替え用 CSS と HTML / JS ---
     ui_layout_html = f"""
     <style>
-        /* Leaflet の MAP 切り替えパネルの位置調整 */
+        /* Leaflet の MAP 切り替えパネルを画面右上の最前面に配置 */
         .leaflet-top.leaflet-right {{
-            top: 80px !important;
-            z-index: 9998 !important;
+            top: 10px !important;
+            z-index: 10000 !important;
+        }}
+
+        /* MAP切り替えパネル (.leaflet-control-layers) にホバー中、自前ボタン群を非表示化 */
+        body:has(.leaflet-control-layers:hover) #control-buttons {{
+            opacity: 0;
+            pointer-events: none;
+        }}
+
+        /* ボタン群にスムーズなフェードアニメーションを設定 */
+        #control-buttons {{
+            transition: opacity 0.2s ease;
         }}
 
         /* モード 0: 標準 (上下コンパクト配置) */
@@ -540,13 +552,13 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
 
         /* モード 1: 右側集約 (縦並び配置) */
         body.mode-1 #summary-panel {{
-            position: fixed; top: 185px; right: 10px; width: 150px;
+            position: fixed; top: 80px; right: 10px; width: 150px;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
             font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.4;
         }}
         body.mode-1 #legend-panel {{
-            position: fixed; top: 430px; right: 10px; left: auto; bottom: auto; width: 150px; height: auto;
+            position: fixed; top: 325px; right: 10px; left: auto; bottom: auto; width: 150px; height: auto;
             background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
             font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.4;
@@ -620,7 +632,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
     </div>
 
-    <!-- PNG保存 ＆ レイアウト切替ボタン (3択切替) -->
+    <!-- PNG保存 ＆ レイアウト切替ボタン -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
     <div id="control-buttons" style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
@@ -644,7 +656,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         const btn = document.getElementById('save-png-btn');
         const originalText = btn.innerText;
 
-        // キャプチャ直前にボタンコンテナを非表示
         btnContainer.style.display = 'none';
 
         htmlToImage.toPng(document.body, {{
@@ -661,7 +672,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
                 alert('画像の生成に失敗しました: ' + error);
             }})
             .finally(function () {{
-                // 成功・失敗に関わらずボタン群を再表示
                 btnContainer.style.display = 'flex';
                 btn.innerText = originalText;
                 btn.disabled = false;
