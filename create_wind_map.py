@@ -239,16 +239,10 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         arrow_angle = (wind_dir + 180) % 360
 
         svg_icon = f"""
-        <div style="
-            width: {size}px;
-            height: {size}px;
-            background: transparent;
-            display: flex;
-            align-items: center;
-            justify-content: center;">
+		<div style="width: {size}px; height: {size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
             <div style="transform: rotate({arrow_angle}deg); width: {size}px; height: {size}px; display: flex; align-items: center; justify-content: center;">
                 <svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
-                    <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="{arrow_fill}" stroke="{arrow_stroke}" stroke-width="2" stroke-linejoin="round"/>
+                    <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="{arrow_fill}" stroke="{arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
                 </svg>
             </div>
         </div>
