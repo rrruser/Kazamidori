@@ -305,9 +305,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         padding: 10px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
         font-family: sans-serif; line-height: 1.5;
     ">
-        <b style="font-size: 13px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">
-            🚩 RIDE SUMMARY
-        </b>
+        <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
         <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
         <b>平均風速:</b> {avg_wind:.1f} m/s<br>
         <b>最大風速:</b> {max_wind:.1f} m/s<br>
