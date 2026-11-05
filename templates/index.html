@@ -3,171 +3,197 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FIT Wind Map Viewer</title>
+    <title>Kazamidori - Cycling Wind Data Visualizer</title>
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { font-family: "Helvetica Neue", Arial, sans-serif; background-color: #f4f6f8; color: #333; padding: 20px; }
-        .container { max-width: 1100px; margin: 0 auto; }
-        h1 { font-size: 24px; margin-bottom: 20px; text-align: center; color: #1a252f; }
-
-        /* ドラッグ＆ドロップエリア */
-        .drop-zone {
-            border: 2px dashed #3498db;
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f6f9;
+            color: #333;
+        }
+        header {
+            background-color: #1a252f;
+            color: #ffffff;
+            padding: 20px;
+            text-align: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+        }
+        header h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 1px;
+        }
+        .container {
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+        /* 高さを 100px に固定し、要素を中央で横並び配置 */
+        .upload-box {
+            border: 3px dashed #3498db;
             border-radius: 12px;
             background-color: #ffffff;
-            padding: 40px 20px;
-            text-align: center;
+            height: 100px;
+            box-sizing: border-box;
+            padding: 0 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
             cursor: pointer;
-            transition: all 0.2s ease;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            transition: border-color 0.3s, background-color 0.3s;
         }
-        .drop-zone.dragover {
-            background-color: #ebf5fb;
+        .upload-box:hover, .upload-box.dragover {
             border-color: #2980b9;
-            transform: scale(1.01);
+            background-color: #ebf5fb;
         }
-        .drop-zone p { font-size: 16px; color: #555; margin-bottom: 10px; }
-        .drop-zone span { font-size: 12px; color: #888; }
-        #fileInput { display: none; }
-
-        /* ステータス & ローディング */
-        .status-message {
-            margin-top: 15px;
+        .upload-text {
+            font-size: 15px;
+            color: #555;
+        }
+        .file-input {
+            display: none;
+        }
+        .btn-select {
+            padding: 8px 20px;
+            background-color: #3498db;
+            color: white;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 14px;
+            white-space: nowrap;
+            transition: background-color 0.2s;
+        }
+        .btn-select:hover {
+            background-color: #2980b9;
+        }
+        #status {
+            margin-top: 20px;
             text-align: center;
             font-size: 14px;
             font-weight: bold;
-            display: none;
         }
-        .status-message.loading { color: #d35400; }
-        .status-message.error { color: #c0392b; }
-
-        /* マップ表示コンテナ */
-        .map-container {
-            margin-top: 25px;
-            background: #fff;
+        #map-container {
+            margin-top: 30px;
+            width: 100%;
+            height: 700px;
             border-radius: 12px;
             overflow: hidden;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
             display: none;
-            height: 650px;
         }
         iframe {
             width: 100%;
             height: 100%;
             border: none;
         }
+        footer {
+            margin-top: 50px;
+            padding: 20px;
+            text-align: center;
+            font-size: 11px;
+            color: #777;
+            line-height: 1.6;
+        }
     </style>
 </head>
 <body>
 
-<div class="container">
-    <h1>🚴‍♂️ FITデータ風向可視化マップ</h1>
+    <header>
+        <h1>🚩 Kazamidori - 走行風データ可視化ツール</h1>
+    </header>
 
-    <!-- ドロップゾーン -->
-    <div class="drop-zone" id="dropZone">
-        <p>ここに <strong>FITファイル (.fit)</strong> をドラッグ＆ドロップ</p>
-        <span>またはクリックしてファイルを選択</span>
-        <input type="file" id="fileInput" accept=".fit">
+    <div class="container">
+        <!-- upload-icon を削除し、コンパクトな高重さ 100px に調整 -->
+        <div class="upload-box" id="drop-zone">
+            <div class="upload-text">ここに <b>FIT</b> または <b>TCX</b> ファイルをドラッグ＆ドロップ</div>
+            <div class="btn-select">ファイルを選択</div>
+            <input type="file" id="file-input" class="file-input" accept=".fit,.tcx">
+        </div>
+
+        <div id="status"></div>
+
+        <div id="map-container">
+            <iframe id="map-frame" src=""></iframe>
+        </div>
     </div>
 
-    <!-- 処理状態インジケータ -->
-    <div class="status-message" id="statusMsg"></div>
+    <footer>
+        <p><b>【免責事項】</b></p>
+        <p>
+            本サービス「Kazamidori」で表示される風向・風速データは Open-Meteo API の推計値であり、局所的な実測値と異なる場合があります。<br>
+            本サービスの利用により生じた直接的・間接的な損害について、制作者は一切の責任を負いません。
+        </p>
+    </footer>
 
-    <!-- マップ表示エリア -->
-    <div class="map-container" id="mapContainer">
-        <iframe id="mapFrame" src=""></iframe>
-    </div>
-</div>
+    <script>
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const statusDiv = document.getElementById('status');
+        const mapContainer = document.getElementById('map-container');
+        const mapFrame = document.getElementById('map-frame');
 
-<script>
-    const dropZone = document.getElementById('dropZone');
-    const fileInput = document.getElementById('fileInput');
-    const statusMsg = document.getElementById('statusMsg');
-    const mapContainer = document.getElementById('mapContainer');
-    const mapFrame = document.getElementById('mapFrame');
+        dropZone.addEventListener('click', () => fileInput.click());
 
-    // クリックでファイルダイアログを開く
-    dropZone.addEventListener('click', () => fileInput.click());
-
-    // ドラッグオーバー時のエフェクト
-    ['dragenter', 'dragover'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
+        dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
             dropZone.classList.add('dragover');
-        }, false);
-    });
+        });
 
-    ['dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
             dropZone.classList.remove('dragover');
-        }, false);
-    });
+            if (e.dataTransfer.files.length > 0) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
 
-    // ファイルドロップ時の処理
-    dropZone.addEventListener('drop', (e) => {
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFileUpload(files[0]);
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFile(e.target.files[0]);
+            }
+        });
+
+        function handleFile(file) {
+            const ext = file.name.split('.').pop().toLowerCase();
+            if (ext !== 'fit' && ext !== 'tcx') {
+                statusDiv.style.color = 'red';
+                statusDiv.innerText = 'エラー: .fit または .tcx 形式のファイルを選択してください。';
+                return;
+            }
+
+            statusDiv.style.color = '#333';
+            statusDiv.innerText = '解析中... 風データとマップを生成しています（数秒かかります）';
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            fetch('/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    statusDiv.style.color = 'green';
+                    statusDiv.innerText = 'マップの生成が完了しました！';
+                    mapFrame.src = data.map_url;
+                    mapContainer.style.display = 'block';
+                } else {
+                    statusDiv.style.color = 'red';
+                    statusDiv.innerText = 'エラー: ' + (data.error || '解析に失敗しました。');
+                }
+            })
+            .catch(err => {
+                statusDiv.style.color = 'red';
+                statusDiv.innerText = '通信エラーが発生しました。ファイルサイズや接続を確認してください。';
+            });
         }
-    });
-
-    // ファイル選択時の処理
-    fileInput.addEventListener('change', (e) => {
-        if (fileInput.files.length > 0) {
-            handleFileUpload(fileInput.files[0]);
-        }
-    });
-
-	function handleFileUpload(file) {
-	    if (!file.name.toLowerCase().endsWith('.fit')) {
-	        showStatus('FITファイル（.fit）のみアップロード可能です。', 'error');
-	        return;
-	    }
-
-	    showStatus('気象データを取得してマップを生成中... (ファイルサイズにより数秒～数分掛かります)', 'loading');
-	    mapContainer.style.display = 'none';
-
-	    const formData = new FormData();
-	    formData.append('file', file);
-
-	    fetch('/upload', {
-	        method: 'POST',
-	        body: formData
-	    })
-	    .then(async response => {
-	        const contentType = response.headers.get('content-type');
-	        if (contentType && contentType.includes('application/json')) {
-	            const data = await response.json();
-	            if (!response.ok) {
-	                throw new Error(data.error || `HTTPエラー: ${response.status}`);
-	            }
-	            return data;
-	        } else {
-	            const text = await response.text();
-	            console.error('HTML Response received:', text);
-	            throw new Error(`サーバー内部エラー (${response.status})。RenderのLogsを確認してください。`);
-	        }
-	    })
-	    .then(data => {
-	        if (data.success) {
-	            showStatus('生成完了！', 'success');
-	            setTimeout(() => { statusMsg.style.display = 'none'; }, 2000);
-	            mapFrame.src = data.map_url;
-	            mapContainer.style.display = 'block';
-	        }
-	    })
-	    .catch(error => {
-	        showStatus('エラー: ' + error.message, 'error');
-	    });
-	}
-
-    function showStatus(msg, type) {
-        statusMsg.innerText = msg;
-        statusMsg.className = 'status-message ' + type;
-        statusMsg.style.display = 'block';
-    }
-</script>
-
+    </script>
 </body>
 </html>
