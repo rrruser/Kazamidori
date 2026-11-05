@@ -70,4 +70,4 @@ def internal_error(error):
     return jsonify({'error': 'サーバー内部エラーが発生しました。RenderのLogsを確認してください。'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(debug=True)
