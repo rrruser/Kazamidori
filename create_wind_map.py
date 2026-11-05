@@ -516,23 +516,23 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
 	# --- レイアウト切り替え用 CSS と HTML / JS ---
     ui_layout_html = f"""
     <style>
-        /* モード 0: デフォルト (標準: 右上 & 左下) */
+        /* モード 0: 標準 (上下コンパクト配置) */
         body.mode-0 #summary-panel {{
-            position: fixed; top: 80px; right: 10px; width: 150px;
+            position: fixed; top: 10px; left: 50px; right: 250px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
-            font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
-            font-family: sans-serif; line-height: 1.4;
+            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.3;
         }}
         body.mode-0 #legend-panel {{
-            position: fixed; bottom: 20px; left: 20px; width: 160px; height: auto;
+            position: fixed; bottom: 10px; left: 10px; right: 10px; width: auto; height: auto;
             background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
-            font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-            font-family: sans-serif; line-height: 1.4;
+            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            font-family: sans-serif; line-height: 1.3;
         }}
-        body.mode-0 .view-vertical {{ display: block; }}
-        body.mode-0 .view-horizontal {{ display: none; }}
+        body.mode-0 .view-vertical {{ display: none; }}
+        body.mode-0 .view-horizontal {{ display: block; }}
 
-        /* モード 1: 右側一括（縦並び） */
+        /* モード 1: 右側集約 (縦並び配置) */
         body.mode-1 #summary-panel {{
             position: fixed; top: 80px; right: 10px; width: 150px;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
@@ -547,22 +547,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         }}
         body.mode-1 .view-vertical {{ display: block; }}
         body.mode-1 .view-horizontal {{ display: none; }}
-
-        /* モード 2: 上下配置（2行以内コンパクト横長）- right: 250px に調整 */
-        body.mode-2 #summary-panel {{
-            position: fixed; top: 10px; left: 50px; right: 250px; width: auto;
-            background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
-            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
-            font-family: sans-serif; line-height: 1.3;
-        }}
-        body.mode-2 #legend-panel {{
-            position: fixed; bottom: 10px; left: 10px; right: 10px; width: auto; height: auto;
-            background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
-            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-            font-family: sans-serif; line-height: 1.3;
-        }}
-        body.mode-2 .view-vertical {{ display: none; }}
-        body.mode-2 .view-horizontal {{ display: block; }}
     </style>
 
     <!-- RIDE SUMMARY パネル -->
@@ -603,8 +587,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
         </div>
 
-        <!-- 横表示モード (基本1行で配置) -->
-        <div class="view-horizontal" style="white-space: nowrap; overflow-x: auto;">
+        <!-- 横表示モード (overflow-x を解除) -->
+        <div class="view-horizontal" style="white-space: nowrap;">
             <b>凡例(実効風):</b> &nbsp;
             <i style="background:#D32F2F; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>強向かい風(+2m/s〜) &nbsp;
             <i style="background:#FB8C00; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>弱向かい風(+0.5m/s) &nbsp;
@@ -615,7 +599,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
     </div>
 
-    <!-- PNG保存 ＆ レイアウト切替ボタン -->
+    <!-- PNG保存 ＆ レイアウト切替ボタン (2択切替) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
     <div style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
@@ -625,11 +609,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     <script>
     document.body.classList.add('mode-0');
     let currentMode = 0;
-    const modeNames = ['標準', '右側集約', '上下コンパクト'];
+    const modeNames = ['標準', '右側集約'];
 
     function toggleLayout() {{
         document.body.classList.remove('mode-' + currentMode);
-        currentMode = (currentMode + 1) % 3;
+        currentMode = (currentMode + 1) % 2;
         document.body.classList.add('mode-' + currentMode);
         document.getElementById('layout-toggle-btn').innerText = '📐 レイアウト: ' + modeNames[currentMode];
     }}
