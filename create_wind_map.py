@@ -548,9 +548,9 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         body.mode-1 .view-vertical {{ display: block; }}
         body.mode-1 .view-horizontal {{ display: none; }}
 
-        /* モード 2: 上下配置（2行以内コンパクト横長）- 右端ボタンを回避 */
+        /* モード 2: 上下配置（2行以内コンパクト横長）- right: 250px に調整 */
         body.mode-2 #summary-panel {{
-            position: fixed; top: 10px; left: 50px; right: 190px; width: auto;
+            position: fixed; top: 10px; left: 50px; right: 250px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
             font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.3;
@@ -603,13 +603,19 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
         </div>
 
-        <div class="view-horizontal">
-            <div><b>相対風向凡例 (実効風):</b> &nbsp; <i style="background:#D32F2F; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>強向かい風(+2m/s〜) &nbsp; <i style="background:#FB8C00; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>弱向かい風(+0.5m/s) &nbsp; <i style="background:#FFFFFF; border:1px solid #333; width:9px; height:9px; display:inline-block; margin-right:2px;"></i>横風/微風</div>
-            <div style="margin-top:2px;"><i style="background:#9CCC65; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>弱追い風(-0.5m/s) &nbsp; <i style="background:#2E7D32; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>追い風(-2.0m/s) &nbsp; <i style="background:#1976D2; width:10px; height:10px; display:inline-block; margin-right:2px;"></i>強追い風(-3.5m/s〜)</div>
+        <!-- 横表示モード (基本1行で配置) -->
+        <div class="view-horizontal" style="white-space: nowrap; overflow-x: auto;">
+            <b>凡例(実効風):</b> &nbsp;
+            <i style="background:#D32F2F; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>強向かい風(+2m/s〜) &nbsp;
+            <i style="background:#FB8C00; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>弱向かい風(+0.5m/s) &nbsp;
+            <i style="background:#FFFFFF; border:1px solid #333; width:9px; height:9px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>横風/微風 &nbsp;
+            <i style="background:#9CCC65; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>弱追い風(-0.5m/s) &nbsp;
+            <i style="background:#2E7D32; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>追い風(-2.0m/s) &nbsp;
+            <i style="background:#1976D2; width:10px; height:10px; display:inline-block; margin-right:2px; vertical-align:middle;"></i>強追い風(-3.5m/s〜)
         </div>
     </div>
 
-    <!-- PNG保存 ＆ レイアウト切替ボタン (縦配置・コンパクト化) -->
+    <!-- PNG保存 ＆ レイアウト切替ボタン -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
     <div style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
