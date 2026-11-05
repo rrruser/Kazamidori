@@ -622,7 +622,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
 
     <!-- PNG保存 ＆ レイアウト切替ボタン (3択切替) -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
-    <div style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
+    <div id="control-buttons" style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
         <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📷 PNG保存</button>
     </div>
@@ -640,22 +640,29 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     }}
 
     function saveAsPNG() {{
+        const btnContainer = document.getElementById('control-buttons');
         const btn = document.getElementById('save-png-btn');
         const originalText = btn.innerText;
-        btn.innerText = '画像生成中...';
-        btn.disabled = true;
 
-        htmlToImage.toPng(document.body, {{ pixelRatio: 2 }})
+        // キャプチャ直前にボタンコンテナを非表示
+        btnContainer.style.display = 'none';
+
+        htmlToImage.toPng(document.body, {{
+            pixelRatio: 2,
+            filter: (node) => node.id !== 'control-buttons'
+        }})
             .then(function (dataUrl) {{
                 const link = document.createElement('a');
                 link.download = 'kazamidori_wind_map.png';
                 link.href = dataUrl;
                 link.click();
-                btn.innerText = originalText;
-                btn.disabled = false;
             }})
             .catch(function (error) {{
                 alert('画像の生成に失敗しました: ' + error);
+            }})
+            .finally(function () {{
+                // 成功・失敗に関わらずボタン群を再表示
+                btnContainer.style.display = 'flex';
                 btn.innerText = originalText;
                 btn.disabled = false;
             }});
