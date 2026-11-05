@@ -1,82 +1,301 @@
 import math
+import struct
 import datetime
 import requests
 import urllib3
+import xml.etree.ElementTree as ET
 import pandas as pd
 import folium
-import fitdecode
-import fitdecode.utils
-
-# 1. CRC計算処理をダミー化して計算時間をゼロ化
-fitdecode.utils.compute_crc = lambda chunk, crc=0: crc
-
-# 2. どんなイベントハンドラ（on_header, on_data_message等）が呼ばれても空関数を返して即座に無視する万能プロセッサ
-class FastProcessor:
-    def __getattr__(self, name):
-        return lambda *args, **kwargs: None
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-# --- 1. FITファイルのストリーミング読み込み＆超高速抽出 ---
-def load_fit_data(file_path):
+# --- 1-A. TCX (XML) ファイルのダイレクト抽出 ---
+def parse_tcx_data(file_path):
     records = []
-    count = 0
-    sample_rate = 50  # 50レコード毎に1件抽出し、全体で処理量を1/50に削減
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+        ns = {'ns': 'http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2'}
 
-    with fitdecode.FitReader(file_path, processor=FastProcessor()) as fit:
-        for frame in fit:
-            if isinstance(frame, fitdecode.FitDataMessage) and frame.name == 'record':
-                count += 1
-                if count % sample_rate != 0:
-                    continue
+        trackpoints = root.findall('.//ns:Trackpoint', ns)
+        if not trackpoints:
+            trackpoints = root.findall('.//Trackpoint')
 
-                lat = frame.get_value('position_lat', fallback=None)
-                lon = frame.get_value('position_long', fallback=None)
-                ts = frame.get_value('timestamp', fallback=None)
+        for tp in trackpoints:
+            time_node = tp.find('ns:Time', ns) if tp.find('ns:Time', ns) is not None else tp.find('Time')
+            pos_node = tp.find('ns:Position', ns) if tp.find('ns:Position', ns) is not None else tp.find('Position')
 
-                if lat is not None and lon is not None and ts is not None:
-                    records.append({
-                        'timestamp': ts,
-                        'lat': lat * (180 / 2**31),
-                        'lon': lon * (180 / 2**31)
-                    })
+            if time_node is not None and pos_node is not None and time_node.text:
+                lat_node = pos_node.find('ns:LatitudeDegrees', ns) if pos_node.find('ns:LatitudeDegrees', ns) is not None else pos_node.find('LatitudeDegrees')
+                lon_node = pos_node.find('ns:LongitudeDegrees', ns) if pos_node.find('ns:LongitudeDegrees', ns) is not None else pos_node.find('LongitudeDegrees')
+
+                if lat_node is not None and lon_node is not None and lat_node.text and lon_node.text:
+                    try:
+                        lat = float(lat_node.text)
+                        lon = float(lon_node.text)
+                        ts_str = time_node.text.replace('Z', '+00:00')
+                        dt_utc = datetime.datetime.fromisoformat(ts_str)
+                        if dt_utc.tzinfo is None:
+                            dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
+
+                        records.append({
+                            'timestamp': dt_utc,
+                            'lat': lat,
+                            'lon': lon
+                        })
+                    except Exception:
+                        continue
+    except Exception as e:
+        print(f"[TCX Parse Error] {e}")
+
+    return records
+
+# --- 1-B. FIT (バイナリ) ファイルのダイレクト抽出 ---
+def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
+    lat, lon, ts = None, None, None
+
+    if 253 in fields:
+        f_off, f_sz, _, end = fields[253]
+        if f_off + f_sz <= len(msg_bytes) and f_sz == 4:
+            ts = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+
+    if ts is not None and ts > 100000:
+        last_ts_ref[0] = ts
+    else:
+        if last_ts_ref[0] is None:
+            last_ts_ref[0] = 1135987200
+        else:
+            last_ts_ref[0] += 1
+        ts = last_ts_ref[0]
+
+    if 0 in fields and 1 in fields:
+        f_off0, f_sz0, _, end0 = fields[0]
+        f_off1, f_sz1, _, end1 = fields[1]
+        if f_sz0 == 4 and f_sz1 == 4 and f_off0 + 4 <= len(msg_bytes) and f_off1 + 4 <= len(msg_bytes):
+            lat_raw = struct.unpack(end0 + 'i', msg_bytes[f_off0:f_off0+4])[0]
+            lon_raw = struct.unpack(end1 + 'i', msg_bytes[f_off1:f_off1+4])[0]
+            if lat_raw != 0x7FFFFFFF and lat_raw != 0 and lon_raw != 0x7FFFFFFF and lon_raw != 0:
+                lat = lat_raw * (180 / 2**31)
+                lon = lon_raw * (180 / 2**31)
+
+    if (lat is None or lon is None) and 1 in fields and 2 in fields:
+        f_off1, f_sz1, _, end1 = fields[1]
+        f_off2, f_sz2, _, end2 = fields[2]
+        if f_sz1 == 4 and f_sz2 == 4 and f_off1 + 4 <= len(msg_bytes) and f_off2 + 4 <= len(msg_bytes):
+            lat_raw = struct.unpack(end1 + 'i', msg_bytes[f_off1:f_off1+4])[0]
+            lon_raw = struct.unpack(end2 + 'i', msg_bytes[f_off2:f_off2+4])[0]
+            if lat_raw != 0x7FFFFFFF and lat_raw != 0 and lon_raw != 0x7FFFFFFF and lon_raw != 0:
+                lat = lat_raw * (180 / 2**31)
+                lon = lon_raw * (180 / 2**31)
+
+    if lat is not None and lon is not None:
+        dt_utc = datetime.datetime.fromtimestamp(ts + 631065600, tz=datetime.timezone.utc)
+        records.append({
+            'timestamp': dt_utc,
+            'lat': lat,
+            'lon': lon
+        })
+
+def parse_fit_data(file_path):
+    with open(file_path, 'rb') as f:
+        data = f.read()
+
+    if len(data) < 12:
+        return []
+
+    records = []
+    file_offset = 0
+    last_ts_ref = [None]
+
+    while file_offset + 12 <= len(data):
+        header_size = data[file_offset]
+        if header_size < 12 or header_size > 32:
+            file_offset += 1
+            continue
+
+        if header_size >= 14 and file_offset + 12 <= len(data):
+            if data[file_offset+8 : file_offset+12] != b'.FIT':
+                file_offset += 1
+                continue
+
+        data_size = struct.unpack('<I', data[file_offset+4 : file_offset+8])[0]
+        block_end = min(len(data), file_offset + header_size + data_size)
+
+        if block_end <= file_offset + header_size:
+            file_offset += 1
+            continue
+
+        offset = file_offset + header_size
+        definitions = {}
+
+        while offset < block_end:
+            header = data[offset]
+
+            if header & 0x80:
+                local_id = (header >> 5) & 0x03
+                time_offset = header & 0x1F
+                if last_ts_ref[0] is not None:
+                    last_ts_ref[0] = (last_ts_ref[0] & ~0x1F) + time_offset
+
+                offset += 1
+                if local_id in definitions:
+                    def_info = definitions[local_id]
+                    mesg_size = def_info['size']
+                    if offset + mesg_size <= block_end:
+                        if def_info['is_record']:
+                            msg_bytes = data[offset : offset + mesg_size]
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, records)
+                        offset += mesg_size
+                    else:
+                        offset += 1
+                else:
+                    offset += 1
+                continue
+
+            is_def = bool(header & 0x40)
+            has_dev = bool(header & 0x20)
+            local_id = header & 0x0F
+
+            if is_def:
+                if offset + 6 > block_end:
+                    break
+                architecture = data[offset + 2]
+                endian = '<' if architecture == 0 else '>'
+                global_mesg_num = struct.unpack(endian + 'H', data[offset+3:offset+5])[0]
+                num_fields = data[offset + 5]
+
+                curr = offset + 6
+                field_offsets = {}
+                mesg_size = 0
+
+                for _ in range(num_fields):
+                    if curr + 3 > block_end:
+                        break
+                    f_num, f_size, f_type = struct.unpack('BBB', data[curr:curr+3])
+                    field_offsets[f_num] = (mesg_size, f_size, f_type, endian)
+                    mesg_size += f_size
+                    curr += 3
+
+                if has_dev and curr < block_end:
+                    num_dev_fields = data[curr]
+                    curr += 1
+                    for _ in range(num_dev_fields):
+                        if curr + 3 > block_end:
+                            break
+                        dev_f_num, dev_f_size, dev_idx = struct.unpack('BBB', data[curr:curr+3])
+                        mesg_size += dev_f_size
+                        curr += 3
+
+                definitions[local_id] = {
+                    'size': mesg_size,
+                    'is_record': (global_mesg_num == 20) or (0 in field_offsets and 1 in field_offsets) or (1 in field_offsets and 2 in field_offsets),
+                    'fields': field_offsets
+                }
+                offset = curr
+            else:
+                offset += 1
+                if local_id in definitions:
+                    def_info = definitions[local_id]
+                    mesg_size = def_info['size']
+                    if offset + mesg_size <= block_end:
+                        if def_info['is_record']:
+                            msg_bytes = data[offset : offset + mesg_size]
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, records)
+                        offset += mesg_size
+                    else:
+                        offset += 1
+                else:
+                    offset += 1
+
+        file_offset = block_end + 2
+
+    return records
+
+# --- 1-C. ファイル種別の自動判別 ---
+def load_activity_data(file_path):
+    is_tcx = file_path.lower().endswith('.tcx')
+    if not is_tcx:
+        try:
+            with open(file_path, 'rb') as f:
+                head = f.read(100).strip()
+                if head.startswith(b'<') or b'xml' in head.lower() or b'trainingcenterdatabase' in head.lower():
+                    is_tcx = True
+        except Exception:
+            pass
+
+    if is_tcx:
+        records = parse_tcx_data(file_path)
+    else:
+        records = parse_fit_data(file_path)
 
     df = pd.DataFrame(records)
     if not df.empty:
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
-        if df['timestamp'].dt.tz is None:
-            df['timestamp'] = df['timestamp'].dt.tz_localize('UTC')
         df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Tokyo')
+
+        total_count = len(df)
+        if total_count <= 500:
+            target_arrows = 60
+        elif total_count <= 2000:
+            target_arrows = 100
+        else:
+            target_arrows = 180
+
+        step = max(1, total_count // target_arrows)
+        df = df.iloc[::step].copy().reset_index(drop=True)
 
     return df
 
-# --- 2. 過去の気象データ（m/s単位）を取得 ---
+# --- 2. 気象データ取得 ---
 def fetch_wind_data(lat, lon, target_datetime):
     date_str = target_datetime.strftime('%Y-%m-%d')
     today = datetime.datetime.now(target_datetime.tzinfo).date()
     days_diff = (today - target_datetime.date()).days
 
-    if days_diff <= 90:
+    if 0 <= days_diff <= 7:
         base_url = "https://api.open-meteo.com/v1/forecast"
     else:
         base_url = "https://archive-api.open-meteo.com/v1/archive"
 
     url = (
         f"{base_url}?"
-        f"latitude={lat}&longitude={lon}&start_date={date_str}&end_date={date_str}"
+        f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={date_str}&end_date={date_str}"
         f"&hourly=wind_speed_10m,wind_direction_10m"
         f"&wind_speed_unit=ms"
         f"&timezone=Asia%2FTokyo"
     )
 
-    # timeout=10 を設定してAPI応答遅延を防止
-    response = requests.get(url, verify=False, timeout=10).json()
-    hourly = response.get('hourly', {})
+    try:
+        response = requests.get(url, verify=False, timeout=10)
+        res_json = response.json()
+        hourly = res_json.get('hourly', {})
 
-    times = pd.to_datetime(hourly.get('time', [])).tz_localize('Asia/Tokyo')
-    wind_speeds = hourly.get('wind_speed_10m', [])
-    wind_dirs = hourly.get('wind_direction_10m', [])
+        raw_times = hourly.get('time', [])
+        raw_speeds = hourly.get('wind_speed_10m', [])
+        raw_dirs = hourly.get('wind_direction_10m', [])
+
+        if not raw_times or len(raw_times) == 0:
+            archive_url = (
+                f"https://archive-api.open-meteo.com/v1/archive?"
+                f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={date_str}&end_date={date_str}"
+                f"&hourly=wind_speed_10m,wind_direction_10m"
+                f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
+            )
+            res_json = requests.get(archive_url, verify=False, timeout=10).json()
+            hourly = res_json.get('hourly', {})
+            raw_times = hourly.get('time', [])
+            raw_speeds = hourly.get('wind_speed_10m', [])
+            raw_dirs = hourly.get('wind_direction_10m', [])
+
+        times = pd.to_datetime(raw_times).tz_localize('Asia/Tokyo')
+        wind_speeds = raw_speeds
+        wind_dirs = raw_dirs
+
+    except Exception as e:
+        print(f"[Error] Failed to fetch wind data: {e}")
+        times = pd.date_range(start=f"{date_str} 00:00", periods=24, freq='h', tz='Asia/Tokyo')
+        wind_speeds = [0.0] * 24
+        wind_dirs = [0] * 24
 
     wind_df = pd.DataFrame({
         'time': times,
@@ -86,7 +305,7 @@ def fetch_wind_data(lat, lon, target_datetime):
 
     return wind_df
 
-# --- 3. 2点間の進行方位角（Bearing）を計算 ---
+# --- 3. 方位角計算 ---
 def calculate_bearing(lat1, lon1, lat2, lon2):
     lat1_rad = math.radians(lat1)
     lat2_rad = math.radians(lat2)
@@ -98,54 +317,29 @@ def calculate_bearing(lat1, lon1, lat2, lon2):
     bearing = math.degrees(math.atan2(y, x))
     return (bearing + 360) % 360
 
-# --- 4. 向かい風/追い風の判定（6段階区分） ---
+# --- 4. 風向判定 ---
 def get_relative_wind_info(wind_dir, wind_speed_ms, heading):
     angle_diff = math.radians(wind_dir - heading)
     effective_headwind = wind_speed_ms * math.cos(angle_diff)
 
     if effective_headwind >= 2.0:
-        segment_color = "#D32F2F"   # 強向かい風（赤）
-        arrow_fill = "#D32F2F"
-        arrow_stroke = "#FFFFFF"
-        label = "強向かい風"
+        return "#D32F2F", "#D32F2F", "#FFFFFF", effective_headwind, "強向かい風"
     elif effective_headwind >= 0.5:
-        segment_color = "#FB8C00"   # 弱向かい風（オレンジ）
-        arrow_fill = "#FB8C00"
-        arrow_stroke = "#FFFFFF"
-        label = "弱向かい風"
+        return "#FB8C00", "#FB8C00", "#FFFFFF", effective_headwind, "弱向かい風"
     elif effective_headwind > -0.5:
-        segment_color = "#FBC02D"   # 横風・無風（黄）
-        arrow_fill = "none"         # 矢印枠のみ
-        arrow_stroke = "#333333"
-        label = "横風/微風"
+        return "#FFFFFF", "none", "#333333", effective_headwind, "横風/微風"
     elif effective_headwind > -2.0:
-        segment_color = "#8BC34A"   # 弱追い風（黄緑）
-        arrow_fill = "#8BC34A"
-        arrow_stroke = "#FFFFFF"
-        label = "弱追い風"
+        return "#9CCC65", "#9CCC65", "#FFFFFF", effective_headwind, "弱追い風"
     elif effective_headwind > -3.5:
-        segment_color = "#4CAF50"   # 追い風（緑）
-        arrow_fill = "#4CAF50"
-        arrow_stroke = "#FFFFFF"
-        label = "追い風"
+        return "#2E7D32", "#2E7D32", "#FFFFFF", effective_headwind, "追い風"
     else:
-        segment_color = "#1976D2"   # 強追い風（青）
-        arrow_fill = "#1976D2"
-        arrow_stroke = "#FFFFFF"
-        label = "強追い風"
+        return "#1976D2", "#1976D2", "#FFFFFF", effective_headwind, "強追い風"
 
-    return segment_color, arrow_fill, arrow_stroke, effective_headwind, label
-
-# --- 5. メイン処理とマップ描画 ---
+# --- 5. メイン描画処理 ---
 def create_wind_map(fit_path, output_html="wind_map.html"):
-    df = load_fit_data(fit_path)
+    df = load_activity_data(fit_path)
     if df.empty:
         raise ValueError("有効な位置データが見つかりませんでした。")
-
-    # 【高速化】データポイントを約5分（300秒）感覚相当に間引く (例: 1秒毎データなら300行置き)
-    # これにより描画速度とメモリ使用量を劇的に削減します
-    step = max(1, len(df) // 100)  # 全体で約100ポイント前後に最適化
-    sample_df = df.iloc[::step].copy().reset_index(drop=True)
 
     start_time_jst = df['timestamp'].iloc[0]
     end_time_jst = df['timestamp'].iloc[-1]
@@ -153,11 +347,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     mid_lon = df['lon'].mean()
     wind_df = fetch_wind_data(mid_lat, mid_lon, start_time_jst)
 
-    sample_df['timestamp'] = sample_df['timestamp'].astype('datetime64[s, Asia/Tokyo]')
-    wind_df['time'] = wind_df['time'].astype('datetime64[s, Asia/Tokyo]')
+    df['timestamp'] = pd.to_datetime(df['timestamp']).astype('datetime64[s, Asia/Tokyo]')
+    wind_df['time'] = pd.to_datetime(wind_df['time']).astype('datetime64[s, Asia/Tokyo]')
 
     sample_df = pd.merge_asof(
-        sample_df.sort_values('timestamp'),
+        df.sort_values('timestamp'),
         wind_df.sort_values('time'),
         left_on='timestamp',
         right_on='time',
@@ -169,8 +363,16 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         zoom_start=12,
         tiles="https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png",
         attr="国土地理院 淡色地図",
-        name="国土地理院 (淡色)"
+        name="国土地理院 (淡色)",
+        zoom_snap=0.25,
+        zoom_delta=0.25,
+        wheelPxPerZoomLevel=200
     )
+
+    # 全体が収まるよう自動ズーム範囲を設定
+    min_lat, max_lat = df['lat'].min(), df['lat'].max()
+    min_lon, max_lon = df['lon'].min(), df['lon'].max()
+    m.fit_bounds([[min_lat, min_lon], [max_lat, max_lon]], padding=[30, 30])
 
     folium.TileLayer(
         tiles="https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png",
@@ -228,18 +430,23 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         if i < len(sample_df) - 1:
             next_row = sample_df.iloc[i+1]
             heading = calculate_bearing(row['lat'], row['lon'], next_row['lat'], next_row['lon'])
-            _, arrow_fill, arrow_stroke, eff_headwind, _ = get_relative_wind_info(wind_dir, wind_speed_ms, heading)
+            _, arrow_fill, arrow_stroke, eff_headwind, wind_label = get_relative_wind_info(wind_dir, wind_speed_ms, heading)
         else:
             arrow_fill = "none"
             arrow_stroke = "#333333"
             eff_headwind = 0.0
+            wind_label = "横風/微風"
 
         size = max(20, min(48, int(20 + wind_speed_ms * 3.5)))
+
+        if wind_label in ["横風/微風", "弱追い風"]:
+            size = max(12, int(size * 0.5))
+
         anchor = size // 2
         arrow_angle = (wind_dir + 180) % 360
 
         svg_icon = f"""
-		<div style="width: {size}px; height: {size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
+        <div style="width: {size}px; height: {size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
             <div style="transform: rotate({arrow_angle}deg); width: {size}px; height: {size}px; display: flex; align-items: center; justify-content: center;">
                 <svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
                     <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="{arrow_fill}" stroke="{arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
@@ -250,30 +457,28 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         icon = folium.DivIcon(html=svg_icon, icon_size=(size, size), icon_anchor=(anchor, anchor))
 
         time_str = row['timestamp'].strftime('%H:%M')
-        popup_text = (
-            f"時刻: {time_str} (JST)<br>"
-            f"風向: {wind_dir:.0f}° / 風速: {wind_speed_ms:.1f} m/s<br>"
-            f"体感向かい風: {eff_headwind:+.1f} m/s"
-        )
+        popup_html = f"""
+        <div style="white-space: nowrap; font-size: 11px; line-height: 1.5; padding: 2px;">
+            <b>時刻:</b> {time_str} (JST)<br>
+            <b>風向:</b> {wind_dir:.0f}° / <b>風速:</b> {wind_speed_ms:.1f} m/s<br>
+            <b>体感向かい風:</b> <span style="font-weight:bold;">{eff_headwind:+.1f} m/s</span>
+        </div>
+        """
 
         folium.Marker(
             location=[row['lat'], row['lon']],
             icon=icon,
-            popup=popup_text
+            popup=folium.Popup(popup_html, max_width=300)
         ).add_to(m)
 
     start_pos = [df['lat'].iloc[0], df['lon'].iloc[0]]
     goal_pos = [df['lat'].iloc[-1], df['lon'].iloc[-1]]
 
     start_icon_html = """
-    <div style="background-color: #2E7D32; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">
-        S
-    </div>
+    <div style="background-color: #2E7D32; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">S</div>
     """
     goal_icon_html = """
-    <div style="background-color: #C62828; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">
-        G
-    </div>
+    <div style="background-color: #C62828; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">G</div>
     """
 
     folium.Marker(
@@ -288,61 +493,89 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         popup=f"GOAL<br>{end_time_jst.strftime('%Y-%m-%d %H:%M')}"
     ).add_to(m)
 
-    avg_wind = sample_df['wind_speed'].mean() if not sample_df['wind_speed'].empty else 0
-    max_wind = sample_df['wind_speed'].max() if not sample_df['wind_speed'].empty else 0
-    max_headwind = max(eff_headwinds) if eff_headwinds else 0
+    clean_speeds = sample_df['wind_speed'].dropna()
+    avg_wind = clean_speeds.mean() if not clean_speeds.empty else 0.0
+    max_wind = clean_speeds.max() if not clean_speeds.empty else 0.0
+    max_headwind = max(eff_headwinds) if eff_headwinds else 0.0
 
     head_pct = (headwind_count / total_segments) * 100
     cross_pct = (crosswind_count / total_segments) * 100
     tail_pct = (tailwind_count / total_segments) * 100
 
+    # --- 風恩恵得点 (0〜100点) の計算 ---
+    wind_score = int(round(head_pct * 0.125 + cross_pct * 0.5 + tail_pct * 1.05))
+    wind_score = max(0, min(100, wind_score))
+
+    if wind_score >= 80:
+        score_color = "#2E7D32"
+    elif wind_score >= 50:
+        score_color = "#1976D2"
+    else:
+        score_color = "#D32F2F"
+
     summary_html = f"""
-    <div style="
-        position: fixed;
-        top: 20px; right: 20px; width: 200px;
-        background-color: rgba(255, 255, 255, 0.95);
-        border: 2px solid #555555; z-index: 9999; font-size: 12px;
-        padding: 10px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
-        font-family: sans-serif; line-height: 1.5;
-    ">
+    <div style="position: fixed; top: 65px; right: 10px; width: 150px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid #555555; z-index: 9999; font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3); font-family: sans-serif; line-height: 1.4;">
         <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
         <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
         <b>平均風速:</b> {avg_wind:.1f} m/s<br>
         <b>最大風速:</b> {max_wind:.1f} m/s<br>
-        <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
-        <hr style="border:0; border-top:1px solid #eee; margin:6px 0;">
+        <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
+        <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
         <b>風向の内訳:</b><br>
-        <div style="display:flex; justify-content:space-between; margin-top:2px;">
-            <span><i style="color:#D32F2F;">■</i> 向かい風:</span> <b>{head_pct:.0f}%</b>
-        </div>
-        <div style="display:flex; justify-content:space-between;">
-            <span><i style="color:#FBC02D;">■</i> 横風/微風:</span> <b>{cross_pct:.0f}%</b>
-        </div>
-        <div style="display:flex; justify-content:space-between;">
-            <span><i style="color:#1976D2;">■</i> 追い風:</span> <b>{tail_pct:.0f}%</b>
+        <div style="display:flex; justify-content:space-between; margin-top:2px;"><span><i style="color:#D32F2F;">■</i> 向かい風:</span> <b>{head_pct:.0f}%</b></div>
+        <div style="display:flex; justify-content:space-between;"><span><i style="color:#FFFFFF; -webkit-text-stroke: 1px #888;">■</i> 横風/微風:</span> <b>{cross_pct:.0f}%</b></div>
+        <div style="display:flex; justify-content:space-between;"><span><i style="color:#1976D2;">■</i> 追い風:</span> <b>{tail_pct:.0f}%</b></div>
+        <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
+        <div style="display:flex; justify-content:space-between; align-items:center;">
+            <b>風恩恵得点:</b>
+            <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
         </div>
     </div>
     """
     m.get_root().html.add_child(folium.Element(summary_html))
 
     legend_html = """
-    <div style="
-        position: fixed;
-        bottom: 20px; left: 20px; width: 160px; height: 160px;
-        background-color: rgba(255, 255, 255, 0.95);
-        border: 2px solid grey; z-index: 9999; font-size: 11px;
-        padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
-        font-family: sans-serif;
-    ">
+    <div style="position: fixed; bottom: 20px; left: 20px; width: 160px; height: 160px; background-color: rgba(255, 255, 255, 0.95); border: 2px solid grey; z-index: 9999; font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3); font-family: sans-serif;">
         <b>相対風向凡例 (実効風)</b><br>
         <i style="background: #D32F2F; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強向かい風 (+2m/s〜)<br>
         <i style="background: #FB8C00; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱向かい風 (+0.5m/s)<br>
-        <i style="background: transparent; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
-        <i style="background: #8BC34A; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
-        <i style="background: #4CAF50; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
+        <i style="background: #FFFFFF; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
+        <i style="background: #9CCC65; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
+        <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
         <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
     </div>
     """
     m.get_root().html.add_child(folium.Element(legend_html))
+
+    png_btn_html = """
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
+    <div style="position: fixed; top: 20px; right: 60px; z-index: 9999;">
+        <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 6px 12px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif;">📷 PNG画像として保存</button>
+    </div>
+    <script>
+    function saveAsPNG() {
+        const btn = document.getElementById('save-png-btn');
+        const originalText = btn.innerText;
+        btn.innerText = '画像生成中...';
+        btn.disabled = true;
+
+        htmlToImage.toPng(document.body, { pixelRatio: 2 })
+            .then(function (dataUrl) {
+                const link = document.createElement('a');
+                link.download = 'kazamidori_wind_map.png';
+                link.href = dataUrl;
+                link.click();
+                btn.innerText = originalText;
+                btn.disabled = false;
+            })
+            .catch(function (error) {
+                alert('画像の生成に失敗しました: ' + error);
+                btn.innerText = originalText;
+                btn.disabled = false;
+            });
+    }
+    </script>
+    """
+    m.get_root().html.add_child(folium.Element(png_btn_html))
 
     m.save(output_html)
