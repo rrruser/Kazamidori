@@ -359,21 +359,21 @@ def load_activity_data(file_path):
                     dist_sum += step_km
             stats['total_dist_km'] = dist_sum
 
-        # 3. 獲得標高の計算 (m) - Strava準拠の平滑化＋ヒステリシス(デッドバンド2.5m)補正
-        valid_alt = full_df['altitude'].dropna()
-        if len(valid_alt) >= 10:
-            smooth_alt = valid_alt.rolling(window=7, min_periods=1, center=True).mean().values
-            gain = 0.0
-            ref_alt = smooth_alt[0]
-            threshold = 2.5
-            for alt_val in smooth_alt[1:]:
-                diff = alt_val - ref_alt
-                if diff >= threshold:
-                    gain += diff
-                    ref_alt = alt_val
-                elif diff <= -threshold:
-                    ref_alt = alt_val
-            stats['elevation_gain'] = int(round(gain))
+            # 3. 獲得標高の計算 (m) - Strava準拠のスムージング(window=5)＋デッドバンド(1.2m)補正
+            valid_alt = full_df['altitude'].dropna()
+            if len(valid_alt) >= 10:
+                smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean().values
+                gain = 0.0
+                ref_alt = smooth_alt[0]
+                threshold = 1.2  # サイコン実測値と微調整したい場合は 0.8〜1.5 の範囲で変更
+                for alt_val in smooth_alt[1:]:
+                    diff = alt_val - ref_alt
+                    if diff >= threshold:
+                        gain += diff
+                        ref_alt = alt_val
+                    elif diff <= -threshold:
+                        ref_alt = alt_val
+                stats['elevation_gain'] = int(round(gain))
 
         # 4. NP (Normalized Power) の計算 (W) - ゼロパワー補完・オートポーズ除外によるStrava準拠計算
         valid_pwr_raw = full_df['power'].dropna()
