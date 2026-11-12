@@ -44,6 +44,9 @@ def parse_tcx_data(file_path):
                     try:
                         lat = float(lat_node.text)
                         lon = float(lon_node.text)
+                        if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+                            continue
+
                         ts_str = time_node.text.replace('Z', '+00:00')
                         dt_utc = datetime.datetime.fromisoformat(ts_str)
                         if dt_utc.tzinfo is None:
@@ -81,7 +84,7 @@ def parse_tcx_data(file_path):
 
 
 # --- 1-B. FIT (バイナリ) ファイルのダイレクト抽出 ---
-def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
+def parse_record_bytes(msg_bytes, fields, last_ts_ref, records, is_strict_record=True):
     lat, lon, ts = None, None, None
     alt, dist, power = None, None, None
 
@@ -94,9 +97,8 @@ def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
         last_ts_ref[0] = ts
     else:
         if last_ts_ref[0] is None:
-            last_ts_ref[0] = 1135987200
-        else:
-            last_ts_ref[0] += 1
+            return
+        last_ts_ref[0] += 1
         ts = last_ts_ref[0]
 
     if 0 in fields and 1 in fields:
@@ -106,8 +108,8 @@ def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
             lat_raw = struct.unpack(end0 + 'i', msg_bytes[f_off0:f_off0+4])[0]
             lon_raw = struct.unpack(end1 + 'i', msg_bytes[f_off1:f_off1+4])[0]
             if lat_raw != 0x7FFFFFFF and lat_raw != 0 and lon_raw != 0x7FFFFFFF and lon_raw != 0:
-                lat = lat_raw * (180 / 2**31)
-                lon = lon_raw * (180 / 2**31)
+                lat = lat_raw * (180.0 / 2**31)
+                lon = lon_raw * (180.0 / 2**31)
 
     if (lat is None or lon is None) and 1 in fields and 2 in fields:
         f_off1, f_sz1, _, end1 = fields[1]
@@ -116,49 +118,58 @@ def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
             lat_raw = struct.unpack(end1 + 'i', msg_bytes[f_off1:f_off1+4])[0]
             lon_raw = struct.unpack(end2 + 'i', msg_bytes[f_off2:f_off2+4])[0]
             if lat_raw != 0x7FFFFFFF and lat_raw != 0 and lon_raw != 0x7FFFFFFF and lon_raw != 0:
-                lat = lat_raw * (180 / 2**31)
-                lon = lon_raw * (180 / 2**31)
+                lat = lat_raw * (180.0 / 2**31)
+                lon = lon_raw * (180.0 / 2**31)
 
-    # 標高 (field 78: enhanced_altitude, field 2: altitude)
-    if 78 in fields:
-        f_off, f_sz, _, end = fields[78]
-        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
-            raw_alt = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
-            if raw_alt != 0xFFFFFFFF:
-                alt = raw_alt / 5.0 - 500.0
-    elif 2 in fields:
-        f_off, f_sz, _, end = fields[2]
-        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
-            raw_alt = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
-            if raw_alt != 0xFFFF:
-                alt = raw_alt / 5.0 - 500.0
+    if lat is None or lon is None:
+        return
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+        return
 
-    # 距離 (field 5: distance, 単位: cm -> m)
-    if 5 in fields:
-        f_off, f_sz, _, end = fields[5]
-        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
-            raw_dist = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
-            if raw_dist != 0xFFFFFFFF:
-                dist = raw_dist / 100.0
+    # 標高・距離・パワーは正規 Record メッセージ (global_mesg_num == 20) のみ抽出
+    if is_strict_record:
+        # 標高 (field 78: enhanced_altitude, field 2: altitude)
+        if 78 in fields:
+            f_off, f_sz, _, end = fields[78]
+            if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+                raw_alt = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+                if raw_alt != 0xFFFFFFFF:
+                    alt = raw_alt / 5.0 - 500.0
+        elif 2 in fields:
+            f_off, f_sz, _, end = fields[2]
+            if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+                raw_alt = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+                if raw_alt != 0xFFFF:
+                    alt = raw_alt / 5.0 - 500.0
 
-    # パワー (field 7: power, 単位: W)
-    if 7 in fields:
-        f_off, f_sz, _, end = fields[7]
-        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
-            raw_pwr = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
-            if raw_pwr != 0xFFFF and raw_pwr < 3000:
-                power = float(raw_pwr)
+        # 距離 (field 5: distance, 単位: cm -> m)
+        if 5 in fields:
+            f_off, f_sz, _, end = fields[5]
+            if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+                raw_dist = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+                if raw_dist != 0xFFFFFFFF:
+                    dist = raw_dist / 100.0
 
-    if lat is not None and lon is not None:
-        dt_utc = datetime.datetime.fromtimestamp(ts + 631065600, tz=datetime.timezone.utc)
-        records.append({
-            'timestamp': dt_utc,
-            'lat': lat,
-            'lon': lon,
-            'altitude': alt,
-            'distance': dist,
-            'power': power
-        })
+        # パワー (field 7: power, 単位: W)
+        if 7 in fields:
+            f_off, f_sz, _, end = fields[7]
+            if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+                raw_pwr = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+                if raw_pwr != 0xFFFF and raw_pwr < 3000:
+                    power = float(raw_pwr)
+
+    dt_utc = datetime.datetime.fromtimestamp(ts + 631065600, tz=datetime.timezone.utc)
+    if not (2000 <= dt_utc.year <= 2035):
+        return
+
+    records.append({
+        'timestamp': dt_utc,
+        'lat': lat,
+        'lon': lon,
+        'altitude': alt,
+        'distance': dist,
+        'power': power
+    })
 
 
 def parse_fit_data(file_path):
@@ -168,7 +179,8 @@ def parse_fit_data(file_path):
     if len(data) < 12:
         return []
 
-    records = []
+    strict_records = []
+    fallback_records = []
     file_offset = 0
     last_ts_ref = [None]
 
@@ -207,9 +219,11 @@ def parse_fit_data(file_path):
                     def_info = definitions[local_id]
                     mesg_size = def_info['size']
                     if offset + mesg_size <= block_end:
-                        if def_info['is_record']:
-                            msg_bytes = data[offset : offset + mesg_size]
-                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, records)
+                        msg_bytes = data[offset : offset + mesg_size]
+                        if def_info['is_strict_record']:
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, strict_records, True)
+                        elif def_info['is_fallback_record']:
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, fallback_records, False)
                         offset += mesg_size
                     else:
                         offset += 1
@@ -251,9 +265,15 @@ def parse_fit_data(file_path):
                         mesg_size += dev_f_size
                         curr += 3
 
+                is_strict = (global_mesg_num == 20)
+                is_fallback = (not is_strict) and (global_mesg_num not in (0, 18, 19, 21, 23, 34, 49, 72)) and (
+                    (0 in field_offsets and 1 in field_offsets) or (1 in field_offsets and 2 in field_offsets)
+                )
+
                 definitions[local_id] = {
                     'size': mesg_size,
-                    'is_record': (global_mesg_num == 20) or (0 in field_offsets and 1 in field_offsets) or (1 in field_offsets and 2 in field_offsets),
+                    'is_strict_record': is_strict,
+                    'is_fallback_record': is_fallback,
                     'fields': field_offsets
                 }
                 offset = curr
@@ -263,9 +283,11 @@ def parse_fit_data(file_path):
                     def_info = definitions[local_id]
                     mesg_size = def_info['size']
                     if offset + mesg_size <= block_end:
-                        if def_info['is_record']:
-                            msg_bytes = data[offset : offset + mesg_size]
-                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, records)
+                        msg_bytes = data[offset : offset + mesg_size]
+                        if def_info['is_strict_record']:
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, strict_records, True)
+                        elif def_info['is_fallback_record']:
+                            parse_record_bytes(msg_bytes, def_info['fields'], last_ts_ref, fallback_records, False)
                         offset += mesg_size
                     else:
                         offset += 1
@@ -274,7 +296,7 @@ def parse_fit_data(file_path):
 
         file_offset = block_end + 2
 
-    return records
+    return strict_records if strict_records else fallback_records
 
 
 # --- 1-C. ファイル種別の自動判別と全データ統計算出 ---
@@ -317,16 +339,24 @@ def load_activity_data(file_path):
         stats['mid_lon'] = float(full_df.loc[mid_idx, 'lon'])
         stats['mid_time'] = full_df.loc[mid_idx, 'timestamp']
 
-        # 2. 総距離の計算 (km)
+        # 2. 総距離の計算 (km): 正常な増分のみ積算し、未記録時は座標から計算
         valid_dist = full_df['distance'].dropna()
-        if len(valid_dist) >= 2 and valid_dist.max() > 0:
-            stats['total_dist_km'] = float(valid_dist.max() - valid_dist.min()) / 1000.0
+        dist_km_from_field = 0.0
+        if len(valid_dist) >= 2:
+            dist_diffs = valid_dist.diff()
+            valid_increments = dist_diffs[(dist_diffs > 0) & (dist_diffs < 2000.0)]
+            dist_km_from_field = float(valid_increments.sum()) / 1000.0
+
+        if dist_km_from_field > 0.1:
+            stats['total_dist_km'] = dist_km_from_field
         else:
             lats = full_df['lat'].values
             lons = full_df['lon'].values
             dist_sum = 0.0
             for idx in range(len(lats) - 1):
-                dist_sum += haversine_km(lats[idx], lons[idx], lats[idx + 1], lons[idx + 1])
+                step_km = haversine_km(lats[idx], lons[idx], lats[idx + 1], lons[idx + 1])
+                if step_km < 2.0:
+                    dist_sum += step_km
             stats['total_dist_km'] = dist_sum
 
         # 3. 獲得標高の計算 (m)
@@ -334,7 +364,7 @@ def load_activity_data(file_path):
         if len(valid_alt) >= 10:
             smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean()
             diffs = smooth_alt.diff()
-            gain = diffs[diffs > 0].sum()
+            gain = diffs[(diffs > 0) & (diffs < 100.0)].sum()
             stats['elevation_gain'] = int(round(gain))
 
         # 4. NP (Normalized Power) の計算 (W)
@@ -364,10 +394,14 @@ def load_activity_data(file_path):
 
 
 # --- 2. 気象データ取得 ---
-def fetch_wind_data(lat, lon, target_datetime):
-    date_str = target_datetime.strftime('%Y-%m-%d')
-    today = datetime.datetime.now(target_datetime.tzinfo).date()
-    days_diff = (today - target_datetime.date()).days
+def fetch_wind_data(lat, lon, start_datetime, end_datetime=None):
+    if end_datetime is None:
+        end_datetime = start_datetime
+
+    start_str = start_datetime.strftime('%Y-%m-%d')
+    end_str = end_datetime.strftime('%Y-%m-%d')
+    today = datetime.datetime.now(start_datetime.tzinfo).date()
+    days_diff = (today - end_datetime.date()).days
 
     if 0 <= days_diff <= 7:
         base_url = "https://api.open-meteo.com/v1/forecast"
@@ -376,7 +410,7 @@ def fetch_wind_data(lat, lon, target_datetime):
 
     url = (
         f"{base_url}?"
-        f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={date_str}&end_date={date_str}"
+        f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
         f"&hourly=wind_speed_10m,wind_direction_10m"
         f"&wind_speed_unit=ms"
         f"&timezone=Asia%2FTokyo"
@@ -394,7 +428,7 @@ def fetch_wind_data(lat, lon, target_datetime):
         if not raw_times or len(raw_times) == 0:
             archive_url = (
                 f"https://archive-api.open-meteo.com/v1/archive?"
-                f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={date_str}&end_date={date_str}"
+                f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
                 f"&hourly=wind_speed_10m,wind_direction_10m"
                 f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
             )
@@ -404,13 +438,21 @@ def fetch_wind_data(lat, lon, target_datetime):
             raw_speeds = hourly.get('wind_speed_10m', [])
             raw_dirs = hourly.get('wind_direction_10m', [])
 
-        times = pd.to_datetime(raw_times).tz_localize('Asia/Tokyo')
+        if not raw_times:
+            raise ValueError(f"Empty wind response for {start_str}..{end_str}")
+
+        times = pd.to_datetime(raw_times)
+        if times.tz is None:
+            times = times.tz_localize('Asia/Tokyo')
+        else:
+            times = times.tz_convert('Asia/Tokyo')
+
         wind_speeds = raw_speeds
         wind_dirs = raw_dirs
 
     except Exception as e:
-        print(f"[Error] Failed to fetch wind data: {e}")
-        times = pd.date_range(start=f"{date_str} 00:00", periods=24, freq='h', tz='Asia/Tokyo')
+        print(f"[Error] Failed to fetch wind data ({start_str}): {e}")
+        times = pd.date_range(start=f"{start_str} 00:00", periods=24, freq='h', tz='Asia/Tokyo')
         wind_speeds = [0.0] * 24
         wind_dirs = [0] * 24
 
@@ -465,7 +507,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     end_time_jst = df['timestamp'].iloc[-1]
     mid_lat = df['lat'].mean()
     mid_lon = df['lon'].mean()
-    wind_df = fetch_wind_data(mid_lat, mid_lon, start_time_jst)
+    wind_df = fetch_wind_data(mid_lat, mid_lon, start_time_jst, end_time_jst)
 
     df['timestamp'] = pd.to_datetime(df['timestamp']).astype('datetime64[s, Asia/Tokyo]')
     wind_df['time'] = pd.to_datetime(wind_df['time']).astype('datetime64[s, Asia/Tokyo]')
@@ -660,14 +702,12 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     else:
         score_color = "#D32F2F"
 
-    # 距離・獲得標高・NP の表示テキスト整形
     dist_str = f"{stats['total_dist_km']:.1f} km"
     elev_str = f"{stats['elevation_gain']:,} m" if stats['elevation_gain'] is not None else "-- m"
     np_str = f"{stats['np_watts']} W" if stats['np_watts'] is not None else "-- W"
 
     ui_layout_html = f"""
     <style>
-        /* 時刻吹き出し（START / 中間 / GOAL）のスタイル */
         .leaflet-tooltip.time-bubble {{
             background-color: rgba(255, 255, 255, 0.96);
             border: 1.5px solid #333;
