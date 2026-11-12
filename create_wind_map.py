@@ -126,37 +126,39 @@ def parse_record_bytes(msg_bytes, fields, last_ts_ref, records, is_strict_record
     if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
         return
 
-    # 標高・距離・パワーは正規 Record メッセージ (global_mesg_num == 20) のみ抽出
-    if is_strict_record:
-        # 標高 (field 78: enhanced_altitude, field 2: altitude)
-        if 78 in fields:
-            f_off, f_sz, _, end = fields[78]
-            if f_sz == 4 and f_off + 4 <= len(msg_bytes):
-                raw_alt = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
-                if raw_alt != 0xFFFFFFFF:
-                    alt = raw_alt / 5.0 - 500.0
-        elif 2 in fields:
-            f_off, f_sz, _, end = fields[2]
-            if f_sz == 2 and f_off + 2 <= len(msg_bytes):
-                raw_alt = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
-                if raw_alt != 0xFFFF:
-                    alt = raw_alt / 5.0 - 500.0
+    # 標高 (field 78: enhanced_altitude を優先し、無効値なら field 2: altitude を参照)
+    if 78 in fields:
+        f_off, f_sz, _, end = fields[78]
+        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+            raw_alt = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+            if raw_alt != 0xFFFFFFFF:
+                cand_alt = raw_alt / 5.0 - 500.0
+                if -500.0 <= cand_alt <= 9000.0:
+                    alt = cand_alt
+    if alt is None and 2 in fields:
+        f_off, f_sz, _, end = fields[2]
+        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+            raw_alt = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+            if raw_alt != 0xFFFF:
+                cand_alt = raw_alt / 5.0 - 500.0
+                if -500.0 <= cand_alt <= 9000.0:
+                    alt = cand_alt
 
-        # 距離 (field 5: distance, 単位: cm -> m)
-        if 5 in fields:
-            f_off, f_sz, _, end = fields[5]
-            if f_sz == 4 and f_off + 4 <= len(msg_bytes):
-                raw_dist = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
-                if raw_dist != 0xFFFFFFFF:
-                    dist = raw_dist / 100.0
+    # パワー (field 7: power, 単位: W)
+    if 7 in fields:
+        f_off, f_sz, _, end = fields[7]
+        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+            raw_pwr = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+            if raw_pwr != 0xFFFF and raw_pwr < 3000:
+                power = float(raw_pwr)
 
-        # パワー (field 7: power, 単位: W)
-        if 7 in fields:
-            f_off, f_sz, _, end = fields[7]
-            if f_sz == 2 and f_off + 2 <= len(msg_bytes):
-                raw_pwr = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
-                if raw_pwr != 0xFFFF and raw_pwr < 3000:
-                    power = float(raw_pwr)
+    # 距離 (field 5: distance, 単位: cm -> m) は正規 Record メッセージのみ抽出
+    if is_strict_record and 5 in fields:
+        f_off, f_sz, _, end = fields[5]
+        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+            raw_dist = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+            if raw_dist != 0xFFFFFFFF:
+                dist = raw_dist / 100.0
 
     dt_utc = datetime.datetime.fromtimestamp(ts + 631065600, tz=datetime.timezone.utc)
     if not (2000 <= dt_utc.year <= 2035):
@@ -359,27 +361,26 @@ def load_activity_data(file_path):
                     dist_sum += step_km
             stats['total_dist_km'] = dist_sum
 
-            # 3. 獲得標高の計算 (m) - Strava準拠のスムージング(window=5)＋デッドバンド(1.2m)補正
-            valid_alt = full_df['altitude'].dropna()
-            if len(valid_alt) >= 10:
-                smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean().values
-                gain = 0.0
-                ref_alt = smooth_alt[0]
-                threshold = 1.2  # サイコン実測値と微調整したい場合は 0.8〜1.5 の範囲で変更
-                for alt_val in smooth_alt[1:]:
-                    diff = alt_val - ref_alt
-                    if diff >= threshold:
-                        gain += diff
-                        ref_alt = alt_val
-                    elif diff <= -threshold:
-                        ref_alt = alt_val
-                stats['elevation_gain'] = int(round(gain))
+        # 3. 獲得標高の計算 (m) - スムージング(window=5)＋デッドバンド(1.2m)補正
+        valid_alt = full_df['altitude'].dropna()
+        if len(valid_alt) >= 10:
+            smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean().values
+            gain = 0.0
+            ref_alt = smooth_alt[0]
+            threshold = 1.2
+            for alt_val in smooth_alt[1:]:
+                diff = alt_val - ref_alt
+                if diff >= threshold:
+                    gain += diff
+                    ref_alt = alt_val
+                elif diff <= -threshold:
+                    ref_alt = alt_val
+            stats['elevation_gain'] = int(round(gain))
 
-        # 4. NP (Normalized Power) の計算 (W) - ゼロパワー補完・オートポーズ除外によるStrava準拠計算
+        # 4. NP (Normalized Power) の計算 (W) - ゼロパワー補完・オートポーズ除外
         valid_pwr_raw = full_df['power'].dropna()
         if len(valid_pwr_raw) >= 30 and valid_pwr_raw.mean() > 0:
             pwr_df = full_df[['timestamp', 'power']].copy()
-            # 走行中のパワー未記録(NaN)はゼロパワー(0W)として補完
             pwr_df['power'] = pwr_df['power'].fillna(0.0)
             pwr_df = pwr_df.groupby('timestamp', as_index=False)['power'].mean().sort_values('timestamp')
 
@@ -392,10 +393,8 @@ def load_activity_data(file_path):
                 if idx < len(pwrs) - 1:
                     dt = int(ts_sec.iloc[idx + 1] - ts_sec.iloc[idx])
                     if 1 < dt <= 5 and pwrs[idx] > 0 and pwrs[idx + 1] > 0:
-                        # スマートレコーディング短時間ギャップは前値を維持
                         expanded_pwrs.extend([pwrs[idx]] * (dt - 1))
                     elif 1 < dt <= 15:
-                        # 惰性走行・減速中の空白秒は0Wとして補完（15秒超はオートポーズとして除外）
                         expanded_pwrs.extend([0.0] * (dt - 1))
 
             if len(expanded_pwrs) >= 30:
@@ -423,6 +422,18 @@ def load_activity_data(file_path):
 
 
 # --- 2. 気象データ取得 ---
+def _extract_valid_wind_hourly(res_json):
+    hourly = res_json.get('hourly', {})
+    raw_times = hourly.get('time', [])
+    raw_speeds = hourly.get('wind_speed_10m', [])
+    raw_dirs = hourly.get('wind_direction_10m', [])
+    if not raw_times or not raw_speeds:
+        return None
+    if not any(s is not None for s in raw_speeds):
+        return None
+    return raw_times, raw_speeds, raw_dirs
+
+
 def fetch_wind_data(lat, lon, start_datetime, end_datetime=None):
     if end_datetime is None:
         end_datetime = start_datetime
@@ -430,66 +441,70 @@ def fetch_wind_data(lat, lon, start_datetime, end_datetime=None):
     start_str = start_datetime.strftime('%Y-%m-%d')
     end_str = end_datetime.strftime('%Y-%m-%d')
     today = datetime.datetime.now(start_datetime.tzinfo).date()
-    days_diff = (today - end_datetime.date()).days
+    days_diff = (today - start_datetime.date()).days
 
-    if 0 <= days_diff <= 7:
-        base_url = "https://api.open-meteo.com/v1/forecast"
+    candidate_urls = []
+    if 0 <= days_diff <= 6:
+        candidate_urls.append(
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat:.4f}&longitude={lon:.4f}&past_days=7&forecast_days=2"
+            f"&hourly=wind_speed_10m,wind_direction_10m"
+            f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
+        )
+        candidate_urls.append(
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
+            f"&hourly=wind_speed_10m,wind_direction_10m"
+            f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
+        )
     else:
-        base_url = "https://archive-api.open-meteo.com/v1/archive"
+        candidate_urls.append(
+            f"https://archive-api.open-meteo.com/v1/archive?"
+            f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
+            f"&hourly=wind_speed_10m,wind_direction_10m"
+            f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
+        )
+        candidate_urls.append(
+            f"https://api.open-meteo.com/v1/forecast?"
+            f"latitude={lat:.4f}&longitude={lon:.4f}&past_days=14&forecast_days=2"
+            f"&hourly=wind_speed_10m,wind_direction_10m"
+            f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
+        )
 
-    url = (
-        f"{base_url}?"
-        f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
-        f"&hourly=wind_speed_10m,wind_direction_10m"
-        f"&wind_speed_unit=ms"
-        f"&timezone=Asia%2FTokyo"
-    )
+    extracted = None
+    for url in candidate_urls:
+        try:
+            response = requests.get(url, verify=False, timeout=20)
+            if response.status_code == 200:
+                extracted = _extract_valid_wind_hourly(response.json())
+                if extracted is not None:
+                    break
+        except Exception as e:
+            print(f"[Warn] Wind API request failed ({url}): {e}")
 
-    try:
-        response = requests.get(url, verify=False, timeout=10)
-        res_json = response.json()
-        hourly = res_json.get('hourly', {})
-
-        raw_times = hourly.get('time', [])
-        raw_speeds = hourly.get('wind_speed_10m', [])
-        raw_dirs = hourly.get('wind_direction_10m', [])
-
-        if not raw_times or len(raw_times) == 0:
-            archive_url = (
-                f"https://archive-api.open-meteo.com/v1/archive?"
-                f"latitude={lat:.4f}&longitude={lon:.4f}&start_date={start_str}&end_date={end_str}"
-                f"&hourly=wind_speed_10m,wind_direction_10m"
-                f"&wind_speed_unit=ms&timezone=Asia%2FTokyo"
-            )
-            res_json = requests.get(archive_url, verify=False, timeout=10).json()
-            hourly = res_json.get('hourly', {})
-            raw_times = hourly.get('time', [])
-            raw_speeds = hourly.get('wind_speed_10m', [])
-            raw_dirs = hourly.get('wind_direction_10m', [])
-
-        if not raw_times:
-            raise ValueError(f"Empty wind response for {start_str}..{end_str}")
-
+    if extracted is not None:
+        raw_times, raw_speeds, raw_dirs = extracted
         times = pd.to_datetime(raw_times)
         if times.tz is None:
             times = times.tz_localize('Asia/Tokyo')
         else:
             times = times.tz_convert('Asia/Tokyo')
 
-        wind_speeds = raw_speeds
-        wind_dirs = raw_dirs
-
-    except Exception as e:
-        print(f"[Error] Failed to fetch wind data ({start_str}): {e}")
+        wind_df = pd.DataFrame({
+            'time': times,
+            'wind_speed': pd.to_numeric(pd.Series(raw_speeds), errors='coerce'),
+            'wind_dir': pd.to_numeric(pd.Series(raw_dirs), errors='coerce')
+        })
+        wind_df['wind_speed'] = wind_df['wind_speed'].ffill().bfill().fillna(0.0)
+        wind_df['wind_dir'] = wind_df['wind_dir'].ffill().bfill().fillna(0.0)
+    else:
+        print(f"[Error] All wind data sources returned empty for {start_str}..{end_str}")
         times = pd.date_range(start=f"{start_str} 00:00", periods=24, freq='h', tz='Asia/Tokyo')
-        wind_speeds = [0.0] * 24
-        wind_dirs = [0] * 24
-
-    wind_df = pd.DataFrame({
-        'time': times,
-        'wind_speed': wind_speeds,
-        'wind_dir': wind_dirs
-    })
+        wind_df = pd.DataFrame({
+            'time': times,
+            'wind_speed': [0.0] * 24,
+            'wind_dir': [0.0] * 24
+        })
 
     return wind_df
 
@@ -767,7 +782,6 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             transition: opacity 0.2s ease;
         }}
 
-        /* 標準レイアウト(mode-0)の横幅を right: 185px まで拡張し折り返しを防止 */
         body.mode-0 #summary-panel {{
             position: fixed; top: 10px; left: 50px; right: 185px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
