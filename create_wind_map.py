@@ -783,7 +783,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         }}
 
         body.mode-0 #summary-panel {{
-            position: fixed; top: 10px; left: 50px; right: 185px; width: auto;
+            position: fixed; top: 10px; left: 50px; right: 178px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
             font-size: 11px; padding: 4px 8px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.3;
@@ -851,7 +851,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
 
         <div class="view-horizontal">
-            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
             <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> | <b>内訳:</b> <span style="color:#D32F2F;">■</span>向かい風:<b>{head_pct:.0f}%</b> <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風:<b>{cross_pct:.0f}%</b> <span style="color:#1976D2;">■</span>追い風:<b>{tail_pct:.0f}%</b></div>
         </div>
     </div>
