@@ -10,6 +10,16 @@ import folium
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    r = 6371.0
+    phi1, phi2 = math.radians(lat1), math.radians(lat2)
+    dphi = math.radians(lat2 - lat1)
+    dlambda = math.radians(lon2 - lon1)
+    a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+    return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
 # --- 1-A. TCX (XML) ファイルのダイレクト抽出 ---
 def parse_tcx_data(file_path):
     records = []
@@ -39,10 +49,28 @@ def parse_tcx_data(file_path):
                         if dt_utc.tzinfo is None:
                             dt_utc = dt_utc.replace(tzinfo=datetime.timezone.utc)
 
+                        alt_node = tp.find('ns:AltitudeMeters', ns) if tp.find('ns:AltitudeMeters', ns) is not None else tp.find('AltitudeMeters')
+                        alt = float(alt_node.text) if (alt_node is not None and alt_node.text) else None
+
+                        dist_node = tp.find('ns:DistanceMeters', ns) if tp.find('ns:DistanceMeters', ns) is not None else tp.find('DistanceMeters')
+                        dist = float(dist_node.text) if (dist_node is not None and dist_node.text) else None
+
+                        power = None
+                        for elem in tp.iter():
+                            if elem.tag.endswith('Watts') and elem.text:
+                                try:
+                                    power = float(elem.text)
+                                    break
+                                except ValueError:
+                                    pass
+
                         records.append({
                             'timestamp': dt_utc,
                             'lat': lat,
-                            'lon': lon
+                            'lon': lon,
+                            'altitude': alt,
+                            'distance': dist,
+                            'power': power
                         })
                     except Exception:
                         continue
@@ -51,9 +79,11 @@ def parse_tcx_data(file_path):
 
     return records
 
+
 # --- 1-B. FIT (バイナリ) ファイルのダイレクト抽出 ---
 def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
     lat, lon, ts = None, None, None
+    alt, dist, power = None, None, None
 
     if 253 in fields:
         f_off, f_sz, _, end = fields[253]
@@ -89,13 +119,47 @@ def parse_record_bytes(msg_bytes, fields, last_ts_ref, records):
                 lat = lat_raw * (180 / 2**31)
                 lon = lon_raw * (180 / 2**31)
 
+    # 標高 (field 78: enhanced_altitude, field 2: altitude)
+    if 78 in fields:
+        f_off, f_sz, _, end = fields[78]
+        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+            raw_alt = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+            if raw_alt != 0xFFFFFFFF:
+                alt = raw_alt / 5.0 - 500.0
+    elif 2 in fields:
+        f_off, f_sz, _, end = fields[2]
+        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+            raw_alt = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+            if raw_alt != 0xFFFF:
+                alt = raw_alt / 5.0 - 500.0
+
+    # 距離 (field 5: distance, 単位: cm -> m)
+    if 5 in fields:
+        f_off, f_sz, _, end = fields[5]
+        if f_sz == 4 and f_off + 4 <= len(msg_bytes):
+            raw_dist = struct.unpack(end + 'I', msg_bytes[f_off:f_off+4])[0]
+            if raw_dist != 0xFFFFFFFF:
+                dist = raw_dist / 100.0
+
+    # パワー (field 7: power, 単位: W)
+    if 7 in fields:
+        f_off, f_sz, _, end = fields[7]
+        if f_sz == 2 and f_off + 2 <= len(msg_bytes):
+            raw_pwr = struct.unpack(end + 'H', msg_bytes[f_off:f_off+2])[0]
+            if raw_pwr != 0xFFFF and raw_pwr < 3000:
+                power = float(raw_pwr)
+
     if lat is not None and lon is not None:
         dt_utc = datetime.datetime.fromtimestamp(ts + 631065600, tz=datetime.timezone.utc)
         records.append({
             'timestamp': dt_utc,
             'lat': lat,
-            'lon': lon
+            'lon': lon,
+            'altitude': alt,
+            'distance': dist,
+            'power': power
         })
+
 
 def parse_fit_data(file_path):
     with open(file_path, 'rb') as f:
@@ -212,7 +276,8 @@ def parse_fit_data(file_path):
 
     return records
 
-# --- 1-C. ファイル種別の自動判別 ---
+
+# --- 1-C. ファイル種別の自動判別と全データ統計算出 ---
 def load_activity_data(file_path):
     is_tcx = file_path.lower().endswith('.tcx')
     if not is_tcx:
@@ -229,11 +294,60 @@ def load_activity_data(file_path):
     else:
         records = parse_fit_data(file_path)
 
-    df = pd.DataFrame(records)
-    if not df.empty:
-        df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Tokyo')
+    full_df = pd.DataFrame(records)
+    stats = {
+        'total_dist_km': 0.0,
+        'elevation_gain': None,
+        'np_watts': None,
+        'mid_lat': None,
+        'mid_lon': None,
+        'mid_time': None
+    }
 
-        total_count = len(df)
+    if not full_df.empty:
+        full_df['timestamp'] = full_df['timestamp'].dt.tz_convert('Asia/Tokyo')
+        full_df = full_df.sort_values('timestamp').reset_index(drop=True)
+
+        # 1. 中間時刻地点（総経過時間の半分）の特定
+        start_ts = full_df['timestamp'].iloc[0]
+        end_ts = full_df['timestamp'].iloc[-1]
+        target_mid_ts = start_ts + (end_ts - start_ts) / 2
+        mid_idx = (full_df['timestamp'] - target_mid_ts).abs().idxmin()
+        stats['mid_lat'] = float(full_df.loc[mid_idx, 'lat'])
+        stats['mid_lon'] = float(full_df.loc[mid_idx, 'lon'])
+        stats['mid_time'] = full_df.loc[mid_idx, 'timestamp']
+
+        # 2. 総距離の計算 (km)
+        valid_dist = full_df['distance'].dropna()
+        if len(valid_dist) >= 2 and valid_dist.max() > 0:
+            stats['total_dist_km'] = float(valid_dist.max() - valid_dist.min()) / 1000.0
+        else:
+            lats = full_df['lat'].values
+            lons = full_df['lon'].values
+            dist_sum = 0.0
+            for idx in range(len(lats) - 1):
+                dist_sum += haversine_km(lats[idx], lons[idx], lats[idx + 1], lons[idx + 1])
+            stats['total_dist_km'] = dist_sum
+
+        # 3. 獲得標高の計算 (m)
+        valid_alt = full_df['altitude'].dropna()
+        if len(valid_alt) >= 10:
+            smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean()
+            diffs = smooth_alt.diff()
+            gain = diffs[diffs > 0].sum()
+            stats['elevation_gain'] = int(round(gain))
+
+        # 4. NP (Normalized Power) の計算 (W)
+        valid_pwr = full_df[['timestamp', 'power']].dropna()
+        if len(valid_pwr) >= 30 and valid_pwr['power'].mean() > 0:
+            pwr_series = valid_pwr.drop_duplicates(subset=['timestamp']).set_index('timestamp')['power']
+            rolling_30s = pwr_series.rolling('30s', min_periods=1).mean()
+            np_val = ((rolling_30s ** 4).mean()) ** 0.25
+            if not pd.isna(np_val) and np_val > 0:
+                stats['np_watts'] = int(round(np_val))
+
+        # 矢印描画用のダウンサンプリング
+        total_count = len(full_df)
         if total_count <= 500:
             target_arrows = 60
         elif total_count <= 2000:
@@ -242,9 +356,12 @@ def load_activity_data(file_path):
             target_arrows = 180
 
         step = max(1, total_count // target_arrows)
-        df = df.iloc[::step].copy().reset_index(drop=True)
+        df = full_df.iloc[::step].copy().reset_index(drop=True)
+    else:
+        df = full_df
 
-    return df
+    return df, stats
+
 
 # --- 2. 気象データ取得 ---
 def fetch_wind_data(lat, lon, target_datetime):
@@ -305,6 +422,7 @@ def fetch_wind_data(lat, lon, target_datetime):
 
     return wind_df
 
+
 # --- 3. 方位角計算 ---
 def calculate_bearing(lat1, lon1, lat2, lon2):
     lat1_rad = math.radians(lat1)
@@ -316,6 +434,7 @@ def calculate_bearing(lat1, lon1, lat2, lon2):
 
     bearing = math.degrees(math.atan2(y, x))
     return (bearing + 360) % 360
+
 
 # --- 4. 風向判定 ---
 def get_relative_wind_info(wind_dir, wind_speed_ms, heading):
@@ -335,9 +454,10 @@ def get_relative_wind_info(wind_dir, wind_speed_ms, heading):
     else:
         return "#1976D2", "#1976D2", "#FFFFFF", effective_headwind, "強追い風"
 
+
 # --- 5. メイン描画処理 ---
 def create_wind_map(fit_path, output_html="wind_map.html"):
-    df = load_activity_data(fit_path)
+    df, stats = load_activity_data(fit_path)
     if df.empty:
         raise ValueError("有効な位置データが見つかりませんでした。")
 
@@ -470,26 +590,55 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             popup=folium.Popup(popup_html, max_width=300)
         ).add_to(m)
 
+    # --- スタート・中間（経過時間半分）・ゴールの3箇所に時刻吹き出し付きマーカー配置 ---
     start_pos = [df['lat'].iloc[0], df['lon'].iloc[0]]
     goal_pos = [df['lat'].iloc[-1], df['lon'].iloc[-1]]
 
     start_icon_html = """
-    <div style="background-color: #2E7D32; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">S</div>
+    <div style="background-color: #2E7D32; color: white; border: 2px solid white; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">S</div>
+    """
+    mid_icon_html = """
+    <div style="background-color: #EF6C00; color: white; border: 2px solid white; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 11px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">M</div>
     """
     goal_icon_html = """
-    <div style="background-color: #C62828; color: white; border: 2px solid white; border-radius: 50%; width: 28px; height: 28px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 13px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">G</div>
+    <div style="background-color: #C62828; color: white; border: 2px solid white; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 12px; box-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: sans-serif;">G</div>
     """
 
     folium.Marker(
         location=start_pos,
-        icon=folium.DivIcon(html=start_icon_html, icon_size=(28, 28), icon_anchor=(14, 14)),
-        popup=f"START<br>{start_time_jst.strftime('%Y-%m-%d %H:%M')}"
+        icon=folium.DivIcon(html=start_icon_html, icon_size=(26, 26), icon_anchor=(13, 13)),
+        tooltip=folium.Tooltip(
+            f"START {start_time_jst.strftime('%H:%M')}",
+            permanent=True,
+            direction="top",
+            offset=[0, -14],
+            class_name="time-bubble"
+        )
     ).add_to(m)
+
+    if stats['mid_lat'] is not None and stats['mid_lon'] is not None and stats['mid_time'] is not None:
+        folium.Marker(
+            location=[stats['mid_lat'], stats['mid_lon']],
+            icon=folium.DivIcon(html=mid_icon_html, icon_size=(22, 22), icon_anchor=(11, 11)),
+            tooltip=folium.Tooltip(
+                f"中間 {stats['mid_time'].strftime('%H:%M')}",
+                permanent=True,
+                direction="top",
+                offset=[0, -12],
+                class_name="time-bubble"
+            )
+        ).add_to(m)
 
     folium.Marker(
         location=goal_pos,
-        icon=folium.DivIcon(html=goal_icon_html, icon_size=(28, 28), icon_anchor=(14, 14)),
-        popup=f"GOAL<br>{end_time_jst.strftime('%Y-%m-%d %H:%M')}"
+        icon=folium.DivIcon(html=goal_icon_html, icon_size=(26, 26), icon_anchor=(13, 13)),
+        tooltip=folium.Tooltip(
+            f"GOAL {end_time_jst.strftime('%H:%M')}",
+            permanent=True,
+            direction="top",
+            offset=[0, -14],
+            class_name="time-bubble"
+        )
     ).add_to(m)
 
     clean_speeds = sample_df['wind_speed'].dropna()
@@ -511,8 +660,30 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     else:
         score_color = "#D32F2F"
 
+    # 距離・獲得標高・NP の表示テキスト整形
+    dist_str = f"{stats['total_dist_km']:.1f} km"
+    elev_str = f"{stats['elevation_gain']:,} m" if stats['elevation_gain'] is not None else "-- m"
+    np_str = f"{stats['np_watts']} W" if stats['np_watts'] is not None else "-- W"
+
     ui_layout_html = f"""
     <style>
+        /* 時刻吹き出し（START / 中間 / GOAL）のスタイル */
+        .leaflet-tooltip.time-bubble {{
+            background-color: rgba(255, 255, 255, 0.96);
+            border: 1.5px solid #333;
+            border-radius: 5px;
+            color: #111;
+            font-weight: bold;
+            font-size: 11px;
+            padding: 2px 6px;
+            box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
+            font-family: sans-serif;
+            white-space: nowrap;
+        }}
+        .leaflet-tooltip-top.time-bubble::before {{
+            border-top-color: #333;
+        }}
+
         .leaflet-top.leaflet-right {{
             top: 10px !important;
             z-index: 10000 !important;
@@ -543,13 +714,13 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         body.mode-0 .view-horizontal {{ display: block; }}
 
         body.mode-1 #summary-panel {{
-            position: fixed; top: 80px; right: 10px; width: 150px;
+            position: fixed; top: 80px; right: 10px; width: 155px;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
             font-size: 11px; padding: 8px; border-radius: 8px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.4;
         }}
         body.mode-1 #legend-panel {{
-            position: fixed; top: 325px; right: 10px; left: auto; bottom: auto; width: 150px; height: auto;
+            position: fixed; top: 385px; right: 10px; left: auto; bottom: auto; width: 155px; height: auto;
             background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
             font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.4;
@@ -576,6 +747,10 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         <div class="view-vertical">
             <b style="font-size: 12px; color: #333; display: block; border-bottom: 1px solid #ccc; padding-bottom: 4px; margin-bottom: 6px;">🐓 RIDE SUMMARY</b>
             <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
+            <b>距離:</b> {dist_str}<br>
+            <b>獲得標高:</b> {elev_str}<br>
+            <b>NP:</b> {np_str}<br>
+            <hr style="border:0; border-top:1px solid #eee; margin:4px 0;">
             <b>平均風速:</b> {avg_wind:.1f} m/s<br>
             <b>最大風速:</b> {max_wind:.1f} m/s<br>
             <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
@@ -592,8 +767,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
 
         <div class="view-horizontal">
-            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) &nbsp;|&nbsp; <b>平均:</b> {avg_wind:.1f}m/s &nbsp;|&nbsp; <b>最大:</b> {max_wind:.1f}m/s &nbsp;|&nbsp; <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> &nbsp;|&nbsp; <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
-            <div style="margin-top:2px;"><b>風向内訳:</b> <span style="color:#D32F2F;">■</span>向かい風: <b>{head_pct:.0f}%</b> &nbsp;|&nbsp; <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風: <b>{cross_pct:.0f}%</b> &nbsp;|&nbsp; <span style="color:#1976D2;">■</span>追い風: <b>{tail_pct:.0f}%</b></div>
+            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) &nbsp;|&nbsp; <b>距離:</b> {dist_str} &nbsp;|&nbsp; <b>獲得:</b> {elev_str} &nbsp;|&nbsp; <b>NP:</b> {np_str} &nbsp;|&nbsp; <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+            <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s &nbsp;|&nbsp; <b>最大:</b> {max_wind:.1f}m/s &nbsp;|&nbsp; <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> &nbsp;|&nbsp; <b>内訳:</b> <span style="color:#D32F2F;">■</span>向かい風: <b>{head_pct:.0f}%</b> <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風: <b>{cross_pct:.0f}%</b> <span style="color:#1976D2;">■</span>追い風: <b>{tail_pct:.0f}%</b></div>
         </div>
     </div>
 
@@ -604,7 +779,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <i style="background: #FB8C00; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱向かい風 (+0.5m/s)<br>
             <i style="background: #FFFFFF; border: 1.5px solid #333333; width: 10px; height: 10px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 横風 / 微風<br>
             <i style="background: #9CCC65; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 弱追い風 (-0.5m/s)<br>
-            <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い风 (-2.0m/s)<br>
+            <i style="background: #2E7D32; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 追い風 (-2.0m/s)<br>
             <i style="background: #1976D2; width: 12px; height: 12px; display: inline-block; margin-right: 5px; border-radius: 2px;"></i> 強追い風 (-3.5m/s〜)
         </div>
 
