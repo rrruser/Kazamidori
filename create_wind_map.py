@@ -339,7 +339,7 @@ def load_activity_data(file_path):
         stats['mid_lon'] = float(full_df.loc[mid_idx, 'lon'])
         stats['mid_time'] = full_df.loc[mid_idx, 'timestamp']
 
-        # 2. 総距離の計算 (km): 正常な増分のみ積算し、未記録時は座標から計算
+        # 2. 総距離の計算 (km)
         valid_dist = full_df['distance'].dropna()
         dist_km_from_field = 0.0
         if len(valid_dist) >= 2:
@@ -359,22 +359,51 @@ def load_activity_data(file_path):
                     dist_sum += step_km
             stats['total_dist_km'] = dist_sum
 
-        # 3. 獲得標高の計算 (m)
+        # 3. 獲得標高の計算 (m) - Strava準拠の平滑化＋ヒステリシス(デッドバンド2.5m)補正
         valid_alt = full_df['altitude'].dropna()
         if len(valid_alt) >= 10:
-            smooth_alt = valid_alt.rolling(window=5, min_periods=1, center=True).mean()
-            diffs = smooth_alt.diff()
-            gain = diffs[(diffs > 0) & (diffs < 100.0)].sum()
+            smooth_alt = valid_alt.rolling(window=7, min_periods=1, center=True).mean().values
+            gain = 0.0
+            ref_alt = smooth_alt[0]
+            threshold = 2.5
+            for alt_val in smooth_alt[1:]:
+                diff = alt_val - ref_alt
+                if diff >= threshold:
+                    gain += diff
+                    ref_alt = alt_val
+                elif diff <= -threshold:
+                    ref_alt = alt_val
             stats['elevation_gain'] = int(round(gain))
 
-        # 4. NP (Normalized Power) の計算 (W)
-        valid_pwr = full_df[['timestamp', 'power']].dropna()
-        if len(valid_pwr) >= 30 and valid_pwr['power'].mean() > 0:
-            pwr_series = valid_pwr.drop_duplicates(subset=['timestamp']).set_index('timestamp')['power']
-            rolling_30s = pwr_series.rolling('30s', min_periods=1).mean()
-            np_val = ((rolling_30s ** 4).mean()) ** 0.25
-            if not pd.isna(np_val) and np_val > 0:
-                stats['np_watts'] = int(round(np_val))
+        # 4. NP (Normalized Power) の計算 (W) - ゼロパワー補完・オートポーズ除外によるStrava準拠計算
+        valid_pwr_raw = full_df['power'].dropna()
+        if len(valid_pwr_raw) >= 30 and valid_pwr_raw.mean() > 0:
+            pwr_df = full_df[['timestamp', 'power']].copy()
+            # 走行中のパワー未記録(NaN)はゼロパワー(0W)として補完
+            pwr_df['power'] = pwr_df['power'].fillna(0.0)
+            pwr_df = pwr_df.groupby('timestamp', as_index=False)['power'].mean().sort_values('timestamp')
+
+            ts_sec = pwr_df['timestamp'].astype('int64') // 10**9
+            pwrs = pwr_df['power'].values
+
+            expanded_pwrs = []
+            for idx in range(len(pwrs)):
+                expanded_pwrs.append(pwrs[idx])
+                if idx < len(pwrs) - 1:
+                    dt = int(ts_sec.iloc[idx + 1] - ts_sec.iloc[idx])
+                    if 1 < dt <= 5 and pwrs[idx] > 0 and pwrs[idx + 1] > 0:
+                        # スマートレコーディング短時間ギャップは前値を維持
+                        expanded_pwrs.extend([pwrs[idx]] * (dt - 1))
+                    elif 1 < dt <= 15:
+                        # 惰性走行・減速中の空白秒は0Wとして補完（15秒超はオートポーズとして除外）
+                        expanded_pwrs.extend([0.0] * (dt - 1))
+
+            if len(expanded_pwrs) >= 30:
+                pwr_series = pd.Series(expanded_pwrs)
+                rolling_30s = pwr_series.rolling(window=30, min_periods=1).mean()
+                np_val = float(((rolling_30s ** 4).mean()) ** 0.25)
+                if not pd.isna(np_val) and np_val > 0:
+                    stats['np_watts'] = int(round(np_val))
 
         # 矢印描画用のダウンサンプリング
         total_count = len(full_df)
@@ -738,10 +767,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             transition: opacity 0.2s ease;
         }}
 
+        /* 標準レイアウト(mode-0)の横幅を right: 185px まで拡張し折り返しを防止 */
         body.mode-0 #summary-panel {{
-            position: fixed; top: 10px; left: 50px; right: 250px; width: auto;
+            position: fixed; top: 10px; left: 50px; right: 185px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
-            font-size: 11px; padding: 4px 10px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
+            font-size: 11px; padding: 4px 8px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.3;
         }}
         body.mode-0 #legend-panel {{
@@ -807,8 +837,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
 
         <div class="view-horizontal">
-            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) &nbsp;|&nbsp; <b>距離:</b> {dist_str} &nbsp;|&nbsp; <b>獲得:</b> {elev_str} &nbsp;|&nbsp; <b>NP:</b> {np_str} &nbsp;|&nbsp; <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
-            <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s &nbsp;|&nbsp; <b>最大:</b> {max_wind:.1f}m/s &nbsp;|&nbsp; <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> &nbsp;|&nbsp; <b>内訳:</b> <span style="color:#D32F2F;">■</span>向かい風: <b>{head_pct:.0f}%</b> <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風: <b>{cross_pct:.0f}%</b> <span style="color:#1976D2;">■</span>追い風: <b>{tail_pct:.0f}%</b></div>
+            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+            <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> | <b>内訳:</b> <span style="color:#D32F2F;">■</span>向かい風:<b>{head_pct:.0f}%</b> <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風:<b>{cross_pct:.0f}%</b> <span style="color:#1976D2;">■</span>追い風:<b>{tail_pct:.0f}%</b></div>
         </div>
     </div>
 
