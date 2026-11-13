@@ -96,6 +96,57 @@
             color: #777;
             line-height: 1.6;
         }
+		/* ヘッダー・タイトル周りの余白を圧縮 */
+		header, h1 {
+		    margin-top: 4px;
+		    margin-bottom: 6px;
+		}
+
+		/* upload-box と #status を横並びにする親コンテナ */
+		.top-control-row {
+		    display: flex;
+		    align-items: stretch;
+		    gap: 10px;
+		    margin-bottom: 8px;
+		}
+
+		/* アップロード枠をコンパクトに横配置 */
+		.upload-box {
+		    flex: 1 1 auto;
+		    margin: 0;
+		    padding: 8px 14px;
+		    display: flex;
+		    align-items: center;
+		    justify-content: center;
+		    min-height: 42px;
+		    box-sizing: border-box;
+		}
+
+		/* ステータス表示を右横に並べる */
+		#status {
+		    flex: 0 1 340px;
+		    margin: 0;
+		    padding: 8px 12px;
+		    display: flex;
+		    align-items: center;
+		    min-height: 42px;
+		    box-sizing: border-box;
+		    font-size: 13px;
+		}
+
+		/* 空のときは余計な枠線や背景を出さずスッキリさせる場合 */
+		#status:empty {
+		    flex: 0 0 auto;
+		    padding: 0;
+		    border: none;
+		    background: transparent;
+		}
+
+		/* 上部が詰まった分、MAPの高さを広げる（既存のiframe / #map-containerに合わせて調整） */
+		iframe, #map-frame, #map-container {
+		    height: calc(100vh - 105px);
+		    min-height: 500px;
+		}
     </style>
 </head>
 <body>
@@ -106,13 +157,14 @@
 
     <div class="container">
         <!-- upload-icon を削除し、コンパクトな高重さ 100px に調整 -->
-        <div class="upload-box" id="drop-zone">
-            <div class="upload-text">ここに <b>FIT</b> または <b>TCX</b> ファイルをドラッグ＆ドロップ</div>
-            <div class="btn-select">ファイルを選択</div>
-            <input type="file" id="file-input" class="file-input" accept=".fit,.tcx">
-        </div>
-
-        <div id="status"></div>
+        <div class="top-control-row">
+    		<div class="upload-box">
+	            <div class="upload-text">ここに <b>FIT</b> または <b>TCX</b> ファイルをドラッグ＆ドロップ</div>
+	            <div class="btn-select">ファイルを選択</div>
+	            <input type="file" id="file-input" class="file-input" accept=".fit,.tcx">
+			</div>
+        	<div id="status"></div>
+		</div>
 
         <div id="map-container">
             <iframe id="map-frame" src=""></iframe>
