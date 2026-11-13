@@ -933,13 +933,18 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         function createArrowMarker(pt, mergedCount, startTime, endTime) {
             const size = pt.size;
             const anchor = Math.floor(size / 2);
+            const badgeHtml = mergedCount >= 3
+                ? `<span style="position: absolute; top: -5px; left: ${Math.max(size - 4, 10)}px; background: #1a252f; color: #ffffff; border: 1px solid #ffffff; border-radius: 8px; padding: 0px 4px; font-size: 9px; font-weight: bold; line-height: 13px; font-family: sans-serif; box-shadow: 0 1px 3px rgba(0,0,0,0.5); white-space: nowrap; pointer-events: none;">×${mergedCount}</span>`
+                : '';
+
             const svgIcon = `
-                <div style="width: ${size}px; height: ${size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
+                <div style="position: relative; width: ${size}px; height: ${size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
                     <div style="transform: rotate(${pt.arrow_angle}deg); width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
                         <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
                             <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="${pt.arrow_fill}" stroke="${pt.arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
                         </svg>
                     </div>
+                    ${badgeHtml}
                 </div>
             `;
             const icon = L.divIcon({
