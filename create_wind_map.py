@@ -916,13 +916,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     """
     m.get_root().html.add_child(folium.Element(ui_layout_html))
 
-    # 拡大率に応じて連続する同じ風量の矢印(3つ以上)を1つに統合するスクリプト
+    # 拡大率に応じて連続する同じ風量の矢印(3つ以上)を1つに統合し「×N」バッジを表示するスクリプト
     arrow_cluster_js = """
     <script>
     (function() {
         const arrowData = __ARROW_DATA_JSON__;
-        const mapObj = __MAP_VAR_NAME__;
-        const arrowLayerGroup = L.layerGroup().addTo(mapObj);
 
         function isSameArrow(a, b) {
             return a.wind_speed === b.wind_speed &&
@@ -970,56 +968,68 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             return L.marker([pt.lat, pt.lon], { icon: icon }).bindPopup(popupHtml, { maxWidth: 300 });
         }
 
-        function renderWindArrows() {
-            arrowLayerGroup.clearLayers();
-            if (!arrowData || arrowData.length === 0) return;
+        function initWindArrows() {
+            if (typeof __MAP_VAR_NAME__ === 'undefined' || !__MAP_VAR_NAME__) {
+                setTimeout(initWindArrows, 50);
+                return;
+            }
 
-            const screenPts = arrowData.map(pt => mapObj.latLngToContainerPoint([pt.lat, pt.lon]));
+            const mapObj = __MAP_VAR_NAME__;
+            const arrowLayerGroup = L.layerGroup().addTo(mapObj);
 
-            // 現在のズームレベルでの画面ピクセル距離閾値
-            const maxStepPx = 90;   // 隣接矢印が90px未満なら連続近接とみなす
-            const maxSpanPx = 240;  // 1グループがカバーする最大画面幅(px)
+            function renderWindArrows() {
+                arrowLayerGroup.clearLayers();
+                if (!arrowData || arrowData.length === 0) return;
 
-            let i = 0;
-            while (i < arrowData.length) {
-                let j = i;
-                let accumulatedSpan = 0;
+                const screenPts = arrowData.map(pt => mapObj.latLngToContainerPoint([pt.lat, pt.lon]));
 
-                while (j + 1 < arrowData.length && isSameArrow(arrowData[i], arrowData[j + 1])) {
-                    const stepPx = screenPts[j].distanceTo(screenPts[j + 1]);
-                    if (stepPx >= maxStepPx) {
-                        break;
+                const maxStepPx = 90;
+                const maxSpanPx = 240;
+
+                let i = 0;
+                while (i < arrowData.length) {
+                    let j = i;
+                    let accumulatedSpan = 0;
+
+                    while (j + 1 < arrowData.length && isSameArrow(arrowData[i], arrowData[j + 1])) {
+                        const stepPx = screenPts[j].distanceTo(screenPts[j + 1]);
+                        if (stepPx >= maxStepPx) {
+                            break;
+                        }
+                        if (accumulatedSpan + stepPx > maxSpanPx && (j - i + 1) >= 3) {
+                            break;
+                        }
+                        accumulatedSpan += stepPx;
+                        j++;
                     }
-                    if (accumulatedSpan + stepPx > maxSpanPx && (j - i + 1) >= 3) {
-                        break;
-                    }
-                    accumulatedSpan += stepPx;
-                    j++;
-                }
 
-                const runLength = j - i + 1;
-                if (runLength >= 3) {
-                    const midIdx = Math.floor((i + j) / 2);
-                    const marker = createArrowMarker(
-                        arrowData[midIdx],
-                        runLength,
-                        arrowData[i].time_str,
-                        arrowData[j].time_str
-                    );
-                    arrowLayerGroup.addLayer(marker);
-                    i = j + 1;
-                } else {
-                    for (let k = i; k <= j; k++) {
-                        const marker = createArrowMarker(arrowData[k], 1, arrowData[k].time_str, arrowData[k].time_str);
+                    const runLength = j - i + 1;
+                    if (runLength >= 3) {
+                        const midIdx = Math.floor((i + j) / 2);
+                        const marker = createArrowMarker(
+                            arrowData[midIdx],
+                            runLength,
+                            arrowData[i].time_str,
+                            arrowData[j].time_str
+                        );
                         arrowLayerGroup.addLayer(marker);
+                        i = j + 1;
+                    } else {
+                        for (let k = i; k <= j; k++) {
+                            const marker = createArrowMarker(arrowData[k], 1, arrowData[k].time_str, arrowData[k].time_str);
+                            arrowLayerGroup.addLayer(marker);
+                        }
+                        i = j + 1;
                     }
-                    i = j + 1;
                 }
             }
+
+            renderWindArrows();
+            mapObj.on('zoomend', renderWindArrows);
+            mapObj.on('resize', renderWindArrows);
         }
 
-        renderWindArrows();
-        mapObj.on('zoomend', renderWindArrows);
+        initWindArrows();
     })();
     </script>
     """
