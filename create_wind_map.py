@@ -840,7 +840,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         }}
 
         body.mode-0 #summary-panel {{
-            position: fixed; top: 10px; left: 50px; right: 178px; width: auto;
+            position: fixed; top: 10px; left: 50px; right: 228px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
             font-size: 11px; padding: 4px 8px; border-radius: 6px; box-shadow: 2px 2px 6px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.3;
