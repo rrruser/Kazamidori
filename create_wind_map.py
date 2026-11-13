@@ -911,9 +911,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         </div>
 
         <div class="view-horizontal">
-            <div style="min-width:0;">
-                <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
-                <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span></div>
+            <div style="min-width:0; display:grid; grid-template-columns: max-content 1fr; column-gap: 4px; row-gap: 2px; align-items: baseline;">
+                <div style="white-space:nowrap;"><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) |</div>
+                <div><b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+                <div></div>
+                <div><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span></div>
             </div>
             {pie_svg_horizontal}
         </div>
