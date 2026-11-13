@@ -542,6 +542,52 @@ def get_relative_wind_info(wind_dir, wind_speed_ms, heading):
         return "#1976D2", "#1976D2", "#FFFFFF", effective_headwind, "強追い風"
 
 
+# --- 4-B. 6種類の風区分円グラフSVG生成 ---
+def make_wind_pie_svg(category_specs, total_segments, size):
+    cx = size / 2.0
+    cy = size / 2.0
+    r = (size / 2.0) - 1.5
+    paths = []
+
+    active_items = [(label, color, count) for label, color, count in category_specs if count > 0]
+    if not active_items or total_segments <= 0:
+        paths.append(f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="#EEEEEE" stroke="#666666" stroke-width="0.8"/>')
+    elif len(active_items) == 1:
+        label, color, count = active_items[0]
+        paths.append(
+            f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="{color}" stroke="#555555" stroke-width="0.8">'
+            f'<title>{label}: 100%</title></circle>'
+        )
+    else:
+        current_angle = -90.0
+        for label, color, count in active_items:
+            ratio = count / total_segments
+            sweep = ratio * 360.0
+            end_angle = current_angle + sweep
+
+            rad1 = math.radians(current_angle)
+            rad2 = math.radians(end_angle)
+            x1 = cx + r * math.cos(rad1)
+            y1 = cy + r * math.sin(rad1)
+            x2 = cx + r * math.cos(rad2)
+            y2 = cy + r * math.sin(rad2)
+            large_arc = 1 if sweep > 180.0 else 0
+            pct = int(round(ratio * 100))
+
+            d = f"M {cx:.2f} {cy:.2f} L {x1:.2f} {y1:.2f} A {r:.2f} {r:.2f} 0 {large_arc} 1 {x2:.2f} {y2:.2f} Z"
+            paths.append(
+                f'<path d="{d}" fill="{color}" stroke="#555555" stroke-width="0.7" stroke-linejoin="round">'
+                f'<title>{label}: {pct}%</title></path>'
+            )
+            current_angle = end_angle
+
+    inner = "".join(paths)
+    return (
+        f'<svg width="{size}" height="{size}" viewBox="0 0 {size} {size}" '
+        f'style="display:block; flex-shrink:0; filter: drop-shadow(0 1px 2px rgba(0,0,0,0.2));">{inner}</svg>'
+    )
+
+
 # --- 5. メイン描画処理 ---
 def create_wind_map(fit_path, output_html="wind_map.html"):
     df, stats = load_activity_data(fit_path)
@@ -595,9 +641,14 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     folium.LayerControl().add_to(m)
 
     eff_headwinds = []
-    headwind_count = 0
-    crosswind_count = 0
-    tailwind_count = 0
+    cat_counts = {
+        "強向かい風": 0,
+        "弱向かい風": 0,
+        "横風/微風": 0,
+        "弱追い風": 0,
+        "追い風": 0,
+        "強追い風": 0,
+    }
 
     sample_list = sample_df.to_dict('records')
     total_segments = max(1, len(sample_list) - 1)
@@ -613,13 +664,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
 
         segment_color, _, _, eff_headwind, wind_label = get_relative_wind_info(wind_dir, wind_speed_ms, heading)
         eff_headwinds.append(eff_headwind)
-
-        if eff_headwind >= 0.5:
-            headwind_count += 1
-        elif eff_headwind <= -0.5:
-            tailwind_count += 1
-        else:
-            crosswind_count += 1
+        cat_counts[wind_label] += 1
 
         seg_coords = [(p1['lat'], p1['lon']), (p2['lat'], p2['lon'])]
         folium.PolyLine(
@@ -722,9 +767,9 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     max_wind = clean_speeds.max() if not clean_speeds.empty else 0.0
     max_headwind = max(eff_headwinds) if eff_headwinds else 0.0
 
-    head_pct = (headwind_count / total_segments) * 100
-    cross_pct = (crosswind_count / total_segments) * 100
-    tail_pct = (tailwind_count / total_segments) * 100
+    head_pct = ((cat_counts["強向かい風"] + cat_counts["弱向かい風"]) / total_segments) * 100
+    cross_pct = (cat_counts["横風/微風"] / total_segments) * 100
+    tail_pct = ((cat_counts["弱追い風"] + cat_counts["追い風"] + cat_counts["強追い風"]) / total_segments) * 100
 
     wind_score = int(round(head_pct * 0.125 + cross_pct * 0.5 + tail_pct * 1.05))
     wind_score = max(0, min(100, wind_score))
@@ -735,6 +780,28 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         score_color = "#1976D2"
     else:
         score_color = "#D32F2F"
+
+    category_specs = [
+        ("強向かい風", "#D32F2F", cat_counts["強向かい風"]),
+        ("弱向かい風", "#FB8C00", cat_counts["弱向かい風"]),
+        ("横風/微風", "#FFFFFF", cat_counts["横風/微風"]),
+        ("弱追い風", "#9CCC65", cat_counts["弱追い風"]),
+        ("追い風", "#2E7D32", cat_counts["追い風"]),
+        ("強追い風", "#1976D2", cat_counts["強追い風"]),
+    ]
+    pie_svg_vertical = make_wind_pie_svg(category_specs, total_segments, 76)
+    pie_svg_horizontal = make_wind_pie_svg(category_specs, total_segments, 38)
+
+    pie_legend_vertical_items = []
+    for label, color, count in category_specs:
+        pct = int(round((count / total_segments) * 100))
+        border_css = "border: 1px solid #555;" if color == "#FFFFFF" else ""
+        pie_legend_vertical_items.append(
+            f'<div style="display:flex; align-items:center; justify-content:space-between; font-size:9px; line-height:1.25;">'
+            f'<span><i style="background:{color}; {border_css} width:7px; height:7px; display:inline-block; margin-right:3px; border-radius:1px;"></i>{label}</span>'
+            f'<b>{pct}%</b></div>'
+        )
+    pie_legend_vertical_html = "".join(pie_legend_vertical_items)
 
     dist_str = f"{stats['total_dist_km']:.1f} km"
     elev_str = f"{stats['elevation_gain']:,} m" if stats['elevation_gain'] is not None else "-- m"
@@ -785,7 +852,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             font-family: sans-serif; line-height: 1.3;
         }}
         body.mode-0 .view-vertical {{ display: none; }}
-        body.mode-0 .view-horizontal {{ display: block; }}
+        body.mode-0 .view-horizontal {{ display: flex; align-items: center; justify-content: space-between; gap: 10px; }}
+        body.mode-0 #legend-panel .view-horizontal {{ display: block; }}
 
         body.mode-1 #summary-panel {{
             position: fixed; top: 80px; right: 10px; width: 155px;
@@ -794,7 +862,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             font-family: sans-serif; line-height: 1.4;
         }}
         body.mode-1 #legend-panel {{
-            position: fixed; top: 385px; right: 10px; left: auto; bottom: auto; width: 155px; height: auto;
+            position: fixed; top: 430px; right: 10px; left: auto; bottom: auto; width: 155px; height: auto;
             background: rgba(255,255,255,0.95); border: 2px solid grey; z-index: 9999;
             font-size: 11px; padding: 8px; border-radius: 6px; box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
             font-family: sans-serif; line-height: 1.4;
@@ -829,20 +897,25 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <b>最大風速:</b> {max_wind:.1f} m/s<br>
             <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
             <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
-            <b>風向の内訳:</b><br>
-            <div style="display:flex; justify-content:space-between; margin-top:2px;"><span><i style="color:#D32F2F;">■</i> 向かい風:</span> <b>{head_pct:.0f}%</b></div>
-            <div style="display:flex; justify-content:space-between;"><span><i style="color:#FFFFFF; -webkit-text-stroke: 1px #888;">■</i> 横風/微風:</span> <b>{cross_pct:.0f}%</b></div>
-            <div style="display:flex; justify-content:space-between;"><span><i style="color:#1976D2;">■</i> 追い風:</span> <b>{tail_pct:.0f}%</b></div>
-            <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
             <div style="display:flex; justify-content:space-between; align-items:center;">
                 <b>風恩恵得点:</b>
                 <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
             </div>
+            <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
+            <div style="display:flex; flex-direction:column; align-items:center; gap:5px;">
+                {pie_svg_vertical}
+                <div style="width:100%; display:flex; flex-direction:column; gap:1px;">
+                    {pie_legend_vertical_html}
+                </div>
+            </div>
         </div>
 
         <div class="view-horizontal">
-            <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
-            <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span> | <b>内訳:</b> <span style="color:#D32F2F;">■</span>向かい風:<b>{head_pct:.0f}%</b> <span style="color:#FFFFFF; -webkit-text-stroke:1px #888;">■</span>横風/微風:<b>{cross_pct:.0f}%</b> <span style="color:#1976D2;">■</span>追い風:<b>{tail_pct:.0f}%</b></div>
+            <div style="min-width:0;">
+                <div><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) | <b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+                <div style="margin-top:2px;"><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span></div>
+            </div>
+            {pie_svg_horizontal}
         </div>
     </div>
 
@@ -916,7 +989,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     """
     m.get_root().html.add_child(folium.Element(ui_layout_html))
 
-    # 拡大率に応じて連続する同じ風量の矢印(3つ以上)を1つに統合し「×N」バッジを表示するスクリプト
+    # 拡大率に応じて連続する同じ風量の矢印(2つ以上)を1つに統合するスクリプト（バッジなし）
     arrow_cluster_js = """
     <script>
     (function() {
@@ -931,18 +1004,14 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         function createArrowMarker(pt, mergedCount, startTime, endTime) {
             const size = pt.size;
             const anchor = Math.floor(size / 2);
-            const badgeHtml = mergedCount >= 3
-                ? `<span style="position: absolute; top: -5px; left: ${Math.max(size - 4, 10)}px; background: #1a252f; color: #ffffff; border: 1px solid #ffffff; border-radius: 8px; padding: 0px 4px; font-size: 9px; font-weight: bold; line-height: 13px; font-family: sans-serif; box-shadow: 0 1px 3px rgba(0,0,0,0.5); white-space: nowrap; pointer-events: none;">×${mergedCount}</span>`
-                : '';
 
             const svgIcon = `
-                <div style="position: relative; width: ${size}px; height: ${size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
+                <div style="width: ${size}px; height: ${size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
                     <div style="transform: rotate(${pt.arrow_angle}deg); width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
                         <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
                             <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="${pt.arrow_fill}" stroke="${pt.arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
                         </svg>
                     </div>
-                    ${badgeHtml}
                 </div>
             `;
             const icon = L.divIcon({
@@ -952,7 +1021,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
                 iconAnchor: [anchor, anchor]
             });
 
-            const timeLabel = mergedCount >= 3
+            const timeLabel = mergedCount >= 2
                 ? `${startTime}〜${endTime} (JST) [${mergedCount}点統合]`
                 : `${pt.time_str} (JST)`;
             const signStr = pt.eff_headwind >= 0 ? `+${pt.eff_headwind.toFixed(1)}` : pt.eff_headwind.toFixed(1);
@@ -996,7 +1065,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
                         if (stepPx >= maxStepPx) {
                             break;
                         }
-                        if (accumulatedSpan + stepPx > maxSpanPx && (j - i + 1) >= 3) {
+                        if (accumulatedSpan + stepPx > maxSpanPx && (j - i + 1) >= 2) {
                             break;
                         }
                         accumulatedSpan += stepPx;
@@ -1004,7 +1073,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
                     }
 
                     const runLength = j - i + 1;
-                    if (runLength >= 3) {
+                    if (runLength >= 2) {
                         const midIdx = Math.floor((i + j) / 2);
                         const marker = createArrowMarker(
                             arrowData[midIdx],
@@ -1015,11 +1084,9 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
                         arrowLayerGroup.addLayer(marker);
                         i = j + 1;
                     } else {
-                        for (let k = i; k <= j; k++) {
-                            const marker = createArrowMarker(arrowData[k], 1, arrowData[k].time_str, arrowData[k].time_str);
-                            arrowLayerGroup.addLayer(marker);
-                        }
-                        i = j + 1;
+                        const marker = createArrowMarker(arrowData[i], 1, arrowData[i].time_str, arrowData[i].time_str);
+                        arrowLayerGroup.addLayer(marker);
+                        i++;
                     }
                 }
             }
