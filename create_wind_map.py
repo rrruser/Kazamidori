@@ -1,3 +1,4 @@
+import json
 import math
 import struct
 import datetime
@@ -601,6 +602,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     sample_list = sample_df.to_dict('records')
     total_segments = max(1, len(sample_list) - 1)
 
+    # ルートの道 (PolyLine) は全区間そのまま描画
     for i in range(len(sample_list) - 1):
         p1 = sample_list[i]
         p2 = sample_list[i+1]
@@ -628,8 +630,10 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             popup=f"区間状況: {wind_label}<br>実効向かい風: {eff_headwind:+.1f} m/s<br>進行方向: {heading:.0f}°"
         ).add_to(m)
 
+    # 風向矢印データを収集し、拡大率に応じた動的グループ化用のJSONを生成
+    arrow_points = []
     for i, row in sample_df.iterrows():
-        wind_dir = row['wind_dir'] if not pd.isna(row['wind_dir']) else 0
+        wind_dir = float(row['wind_dir']) if not pd.isna(row['wind_dir']) else 0.0
         wind_speed_ms = float(row['wind_speed']) if not pd.isna(row['wind_speed']) else 0.0
 
         if i < len(sample_df) - 1:
@@ -643,38 +647,24 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             wind_label = "横風/微風"
 
         size = max(20, min(48, int(20 + wind_speed_ms * 3.5)))
-
         if wind_label in ["横風/微風", "弱追い風"]:
             size = max(12, int(size * 0.5))
 
-        anchor = size // 2
         arrow_angle = (wind_dir + 180) % 360
 
-        svg_icon = f"""
-        <div style="width: {size}px; height: {size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
-            <div style="transform: rotate({arrow_angle}deg); width: {size}px; height: {size}px; display: flex; align-items: center; justify-content: center;">
-                <svg width="{size}" height="{size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
-                    <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="{arrow_fill}" stroke="{arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
-                </svg>
-            </div>
-        </div>
-        """
-        icon = folium.DivIcon(html=svg_icon, icon_size=(size, size), icon_anchor=(anchor, anchor))
-
-        time_str = row['timestamp'].strftime('%H:%M')
-        popup_html = f"""
-        <div style="white-space: nowrap; font-size: 11px; line-height: 1.5; padding: 2px;">
-            <b>時刻:</b> {time_str} (JST)<br>
-            <b>風向:</b> {wind_dir:.0f}° / <b>風速:</b> {wind_speed_ms:.1f} m/s<br>
-            <b>体感向かい風:</b> <span style="font-weight:bold;">{eff_headwind:+.1f} m/s</span>
-        </div>
-        """
-
-        folium.Marker(
-            location=[row['lat'], row['lon']],
-            icon=icon,
-            popup=folium.Popup(popup_html, max_width=300)
-        ).add_to(m)
+        arrow_points.append({
+            'lat': float(row['lat']),
+            'lon': float(row['lon']),
+            'wind_dir': round(wind_dir, 1),
+            'wind_speed': round(wind_speed_ms, 1),
+            'wind_label': wind_label,
+            'arrow_fill': arrow_fill,
+            'arrow_stroke': arrow_stroke,
+            'eff_headwind': round(float(eff_headwind), 1),
+            'time_str': row['timestamp'].strftime('%H:%M'),
+            'size': int(size),
+            'arrow_angle': round(float(arrow_angle), 1)
+        })
 
     # --- スタート・中間（経過時間半分）・ゴールの3箇所に時刻吹き出し付きマーカー配置 ---
     start_pos = [df['lat'].iloc[0], df['lon'].iloc[0]]
@@ -925,5 +915,111 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     </script>
     """
     m.get_root().html.add_child(folium.Element(ui_layout_html))
+
+    # 拡大率に応じて連続する同じ風量の矢印(3つ以上)を1つに統合するスクリプト
+    arrow_cluster_js = """
+    <script>
+    (function() {
+        const arrowData = __ARROW_DATA_JSON__;
+        const mapObj = __MAP_VAR_NAME__;
+        const arrowLayerGroup = L.layerGroup().addTo(mapObj);
+
+        function isSameArrow(a, b) {
+            return a.wind_speed === b.wind_speed &&
+                   a.wind_dir === b.wind_dir &&
+                   a.wind_label === b.wind_label;
+        }
+
+        function createArrowMarker(pt, mergedCount, startTime, endTime) {
+            const size = pt.size;
+            const anchor = Math.floor(size / 2);
+            const svgIcon = `
+                <div style="width: ${size}px; height: ${size}px; background: transparent; display: flex; align-items: center; justify-content: center;">
+                    <div style="transform: rotate(${pt.arrow_angle}deg); width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center;">
+                        <svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0px 1px 2px rgba(0,0,0,0.5));">
+                            <path d="M12 2L4 21L12 17L20 21L12 2Z" fill="${pt.arrow_fill}" stroke="${pt.arrow_stroke}" stroke-width="1" stroke-linejoin="round"/>
+                        </svg>
+                    </div>
+                </div>
+            `;
+            const icon = L.divIcon({
+                html: svgIcon,
+                className: '',
+                iconSize: [size, size],
+                iconAnchor: [anchor, anchor]
+            });
+
+            const timeLabel = mergedCount >= 3
+                ? `${startTime}〜${endTime} (JST) [${mergedCount}点統合]`
+                : `${pt.time_str} (JST)`;
+            const signStr = pt.eff_headwind >= 0 ? `+${pt.eff_headwind.toFixed(1)}` : pt.eff_headwind.toFixed(1);
+
+            const popupHtml = `
+                <div style="white-space: nowrap; font-size: 11px; line-height: 1.5; padding: 2px;">
+                    <b>時刻:</b> ${timeLabel}<br>
+                    <b>風向:</b> ${Math.round(pt.wind_dir)}° / <b>風速:</b> ${pt.wind_speed.toFixed(1)} m/s<br>
+                    <b>体感向かい風:</b> <span style="font-weight:bold;">${signStr} m/s</span>
+                </div>
+            `;
+
+            return L.marker([pt.lat, pt.lon], { icon: icon }).bindPopup(popupHtml, { maxWidth: 300 });
+        }
+
+        function renderWindArrows() {
+            arrowLayerGroup.clearLayers();
+            if (!arrowData || arrowData.length === 0) return;
+
+            const screenPts = arrowData.map(pt => mapObj.latLngToContainerPoint([pt.lat, pt.lon]));
+
+            // 現在のズームレベルでの画面ピクセル距離閾値
+            const maxStepPx = 90;   // 隣接矢印が90px未満なら連続近接とみなす
+            const maxSpanPx = 240;  // 1グループがカバーする最大画面幅(px)
+
+            let i = 0;
+            while (i < arrowData.length) {
+                let j = i;
+                let accumulatedSpan = 0;
+
+                while (j + 1 < arrowData.length && isSameArrow(arrowData[i], arrowData[j + 1])) {
+                    const stepPx = screenPts[j].distanceTo(screenPts[j + 1]);
+                    if (stepPx >= maxStepPx) {
+                        break;
+                    }
+                    if (accumulatedSpan + stepPx > maxSpanPx && (j - i + 1) >= 3) {
+                        break;
+                    }
+                    accumulatedSpan += stepPx;
+                    j++;
+                }
+
+                const runLength = j - i + 1;
+                if (runLength >= 3) {
+                    const midIdx = Math.floor((i + j) / 2);
+                    const marker = createArrowMarker(
+                        arrowData[midIdx],
+                        runLength,
+                        arrowData[i].time_str,
+                        arrowData[j].time_str
+                    );
+                    arrowLayerGroup.addLayer(marker);
+                    i = j + 1;
+                } else {
+                    for (let k = i; k <= j; k++) {
+                        const marker = createArrowMarker(arrowData[k], 1, arrowData[k].time_str, arrowData[k].time_str);
+                        arrowLayerGroup.addLayer(marker);
+                    }
+                    i = j + 1;
+                }
+            }
+        }
+
+        renderWindArrows();
+        mapObj.on('zoomend', renderWindArrows);
+    })();
+    </script>
+    """
+    arrow_cluster_js = arrow_cluster_js.replace('__ARROW_DATA_JSON__', json.dumps(arrow_points, ensure_ascii=False))
+    arrow_cluster_js = arrow_cluster_js.replace('__MAP_VAR_NAME__', m.get_name())
+    m.get_root().html.add_child(folium.Element(arrow_cluster_js))
 
     m.save(output_html)
