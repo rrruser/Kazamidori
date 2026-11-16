@@ -839,6 +839,11 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             transition: opacity 0.2s ease;
         }}
 
+        /* NP非表示トグル時のスタイル */
+        body.hide-np .np-item {{
+            display: none !important;
+        }}
+
         body.mode-0 #summary-panel {{
             position: fixed; top: 10px; left: 50px; right: 228px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
@@ -891,7 +896,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <b>日付:</b> {start_time_jst.strftime('%Y-%m-%d')}<br>
             <b>距離:</b> {dist_str}<br>
             <b>獲得標高:</b> {elev_str}<br>
-            <b>NP:</b> {np_str}<br>
+            <span class="np-item"><b>NP:</b> {np_str}<br></span>
             <hr style="border:0; border-top:1px solid #eee; margin:4px 0;">
             <b>平均風速:</b> {avg_wind:.1f} m/s<br>
             <b>最大風速:</b> {max_wind:.1f} m/s<br>
@@ -913,7 +918,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         <div class="view-horizontal">
             <div style="min-width:0; display:grid; grid-template-columns: max-content 1fr; column-gap: 4px; row-gap: 2px; align-items: baseline;">
                 <div style="white-space:nowrap;"><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) |</div>
-                <div><b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str} | <b>NP:</b> {np_str} | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+                <div><b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str}<span class="np-item"> | <b>NP:</b> {np_str}</span> | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
                 <div></div>
                 <div><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span></div>
             </div>
@@ -944,21 +949,37 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     </div>
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html-to-image/1.11.11/html-to-image.min.js"></script>
-    <div id="control-buttons" style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 5px;">
+    <div id="control-buttons" style="position: fixed; top: 12px; right: 60px; z-index: 9999; display: flex; flex-direction: column; align-items: flex-end; gap: 4px;">
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
         <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📷 PNG保存</button>
+        <button id="np-toggle-btn" onclick="toggleNP()" style="background-color: #334155; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">⚡ NP: 表示</button>
     </div>
 
     <script>
     document.body.classList.add('mode-0');
     let currentMode = 0;
     const modeNames = ['標準', '右側集約', '表示なし'];
+    let showNP = true;
 
     function toggleLayout() {{
         document.body.classList.remove('mode-' + currentMode);
         currentMode = (currentMode + 1) % 3;
         document.body.classList.add('mode-' + currentMode);
         document.getElementById('layout-toggle-btn').innerText = '📐 レイアウト: ' + modeNames[currentMode];
+    }}
+
+    function toggleNP() {{
+        showNP = !showNP;
+        const btn = document.getElementById('np-toggle-btn');
+        if (showNP) {{
+            document.body.classList.remove('hide-np');
+            btn.innerText = '⚡ NP: 表示';
+            btn.style.backgroundColor = '#334155';
+        }} else {{
+            document.body.classList.add('hide-np');
+            btn.innerText = '⚡ NP: 非表示';
+            btn.style.backgroundColor = '#64748b';
+        }}
     }}
 
     function saveAsPNG() {{
