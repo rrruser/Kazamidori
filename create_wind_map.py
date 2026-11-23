@@ -993,6 +993,16 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             display: none !important;
         }}
 
+        /* 風恩恵得点 拡大表示トグル時のスタイル */
+        body.big-score .score-inline-horizontal,
+        body.big-score .score-inline-vertical {{
+            display: none !important;
+        }}
+        body.big-score .score-big-horizontal,
+        body.big-score .score-big-vertical {{
+            display: flex !important;
+        }}
+
         body.mode-0 #summary-panel {{
             position: fixed; top: 10px; left: 50px; right: 228px; width: auto;
             background: rgba(255,255,255,0.95); border: 2px solid #555; z-index: 9999;
@@ -1050,14 +1060,22 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             <b>平均風速:</b> {avg_wind:.1f} m/s<br>
             <b>最大風速:</b> {max_wind:.1f} m/s<br>
             <b>最大体感<br>向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f} m/s</span>
-            <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
-            <div style="display:flex; justify-content:space-between; align-items:center;">
-                <b>風恩恵得点:</b>
-                <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
+            <div class="score-inline-vertical">
+                <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <b>風恩恵得点:</b>
+                    <span style="font-size: 14px; font-weight: bold; color: {score_color};">{wind_score}点</span>
+                </div>
             </div>
             <hr style="border:0; border-top:1px solid #eee; margin:5px 0;">
             <div style="display:flex; flex-direction:column; align-items:center; gap:5px;">
-                {pie_svg_vertical}
+                <div style="display:flex; align-items:center; justify-content:center; gap:6px; width:100%;">
+                    {pie_svg_vertical}
+                    <div class="score-big-vertical" style="display:none; flex-direction:column; align-items:center; justify-content:center; line-height:1.05; min-width:0;">
+                        <span style="font-size:9px; color:#555; font-weight:bold; white-space:nowrap;">風恩恵得点</span>
+                        <span style="font-size:28px; font-weight:900; color:{score_color}; letter-spacing:-0.5px; white-space:nowrap;">{wind_score}<span style="font-size:12px; font-weight:bold; margin-left:1px;">点</span></span>
+                    </div>
+                </div>
                 <div style="width:100%; display:flex; flex-direction:column; gap:1px;">
                     {pie_legend_vertical_html}
                 </div>
@@ -1067,11 +1085,17 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         <div class="view-horizontal">
             <div style="min-width:0; display:grid; grid-template-columns: max-content 1fr; column-gap: 4px; row-gap: 2px; align-items: baseline;">
                 <div style="white-space:nowrap;"><b>🐓 RIDE SUMMARY</b> ({start_time_jst.strftime('%Y-%m-%d')}) |</div>
-                <div><b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str}<span class="np-item"> | <b>NP:</b> {np_str}</span> | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></div>
+                <div><b>距離:</b> {dist_str} | <b>獲得:</b> {elev_str}<span class="np-item"> | <b>NP:</b> {np_str}</span><span class="score-inline-horizontal"> | <b>風恩恵得点:</b> <span style="font-size:12px; font-weight:bold; color:{score_color};">{wind_score}点</span></span></div>
                 <div></div>
                 <div><b>平均風速:</b> {avg_wind:.1f}m/s | <b>最大:</b> {max_wind:.1f}m/s | <b>最大体感向かい風:</b> <span style="color:#D32F2F; font-weight:bold;">+{max_headwind:.1f}m/s</span></div>
             </div>
-            {pie_svg_horizontal}
+            <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
+                {pie_svg_horizontal}
+                <div class="score-big-horizontal" style="display:none; flex-direction:column; align-items:center; justify-content:center; border-left:1px solid #ddd; padding-left:8px; line-height:1.05;">
+                    <span style="font-size:8.5px; color:#555; font-weight:bold; white-space:nowrap;">風恩恵得点</span>
+                    <span style="font-size:25px; font-weight:900; color:{score_color}; letter-spacing:-0.5px; white-space:nowrap;">{wind_score}<span style="font-size:11px; font-weight:bold; margin-left:1px;">点</span></span>
+                </div>
+            </div>
         </div>
     </div>
 
@@ -1102,6 +1126,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
         <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📷 PNG保存</button>
         <button id="np-toggle-btn" onclick="toggleNP()" style="background-color: #334155; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">⚡ NP: 表示</button>
+        <button id="score-size-toggle-btn" onclick="toggleScoreSize()" style="background-color: #334155; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">🏆 得点表示: 標準</button>
     </div>
 
     <script>
@@ -1109,6 +1134,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     let currentMode = 0;
     const modeNames = ['標準', '右側集約', '表示なし'];
     let showNP = true;
+    let isBigScore = false;
 
     function toggleLayout() {{
         document.body.classList.remove('mode-' + currentMode);
@@ -1128,6 +1154,20 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
             document.body.classList.add('hide-np');
             btn.innerText = '⚡ NP: 非表示';
             btn.style.backgroundColor = '#64748b';
+        }}
+    }}
+
+    function toggleScoreSize() {{
+        isBigScore = !isBigScore;
+        const btn = document.getElementById('score-size-toggle-btn');
+        if (isBigScore) {{
+            document.body.classList.add('big-score');
+            btn.innerText = '🏆 得点表示: 拡大';
+            btn.style.backgroundColor = '#0f766e';
+        }} else {{
+            document.body.classList.remove('big-score');
+            btn.innerText = '🏆 得点表示: 標準';
+            btn.style.backgroundColor = '#334155';
         }}
     }}
 
