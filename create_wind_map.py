@@ -915,7 +915,7 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     sample_list = sample_df.to_dict('records')
     total_segments = max(1, len(sample_list) - 1)
 
-    # ルートの道 (PolyLine) は全区間そのまま描画
+    # ルートの道 (PolyLine) は全区間そのまま描画（矢印と同じコンパクトなポップアップに設定）
     for i in range(len(sample_list) - 1):
         p1 = sample_list[i]
         p2 = sample_list[i+1]
@@ -929,12 +929,19 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         cat_counts[wind_label] += 1
 
         seg_coords = [(p1['lat'], p1['lon']), (p2['lat'], p2['lon'])]
+        route_popup_html = (
+            f'<div style="white-space: nowrap; font-size: 11px; line-height: 1.5; padding: 2px;">'
+            f'<b>区間状況:</b> {wind_label}<br>'
+            f'<b>実効向かい風:</b> <span style="font-weight:bold;">{eff_headwind:+.1f} m/s</span><br>'
+            f'<b>進行方向:</b> {heading:.0f}°'
+            f'</div>'
+        )
         folium.PolyLine(
             seg_coords,
             color=segment_color,
             weight=6,
             opacity=0.85,
-            popup=f"区間状況: {wind_label}<br>実効向かい風: {eff_headwind:+.1f} m/s<br>進行方向: {heading:.0f}°"
+            popup=folium.Popup(route_popup_html, max_width=300)
         ).add_to(m)
 
     # 風向矢印データを収集し、拡大率に応じた動的グループ化用のJSONを生成
