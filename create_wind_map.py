@@ -23,7 +23,7 @@ class WindScoreConfig:
 
     # アプローチ③: 巡航区間フィルタリング＆重み付け
     min_cruise_speed_kmh: float = 15.0  # 停止・低速除外のしきい値 [km/h]
-    max_abs_accel_mps2: float = 0.8     # 急加減速スパイク除外のしきい値 [m/s^2]
+    max_abs_accel_mps2: float = 1.5     # 急加減速スパイク除外のしきい値 [m/s^2]
     min_power_watts: float = 30.0       # パワー有効判定の最小値 [W]
 
     # アプローチ①: スコア換算式の50点基準シフト（シグモイド関数）
@@ -585,9 +585,9 @@ def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAUL
         return 50
 
     work_df = full_df.copy()
-    work_df['timestamp'] = pd.to_datetime(work_df['timestamp']).astype('datetime64[s, Asia/Tokyo]')
+    work_df['timestamp'] = pd.to_datetime(work_df['timestamp']).astype('datetime64[ns, Asia/Tokyo]')
     w_df = wind_df.copy()
-    w_df['time'] = pd.to_datetime(w_df['time']).astype('datetime64[s, Asia/Tokyo]')
+    w_df['time'] = pd.to_datetime(w_df['time']).astype('datetime64[ns, Asia/Tokyo]')
 
     merged = pd.merge_asof(
         work_df.sort_values('timestamp'),
@@ -595,15 +595,36 @@ def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAUL
         left_on='timestamp',
         right_on='time',
         direction='nearest'
-    )
+    ).reset_index(drop=True)
+
+    # 時間差分 [秒] を精度非依存で確実に算出
+    dt_array = merged['timestamp'].diff().dt.total_seconds().fillna(0.0).values
 
     lats = merged['lat'].values
     lons = merged['lon'].values
-    ts_sec = merged['timestamp'].astype('int64') // 10**9
     dists = merged['distance'].values if 'distance' in merged.columns else [None] * len(merged)
     powers = merged['power'].values if 'power' in merged.columns else [None] * len(merged)
     wind_speeds = merged['wind_speed'].fillna(0.0).values
     wind_dirs = merged['wind_dir'].fillna(0.0).values
+
+    # 各区間の瞬間速度 [m/s] を算出し、GPSノイズを軽く平滑化
+    raw_speeds = [0.0] * len(merged)
+    for i in range(1, len(merged)):
+        dt = float(dt_array[i])
+        if dt <= 0.0 or dt > 15.0:
+            continue
+        step_m = None
+        if dists[i] is not None and dists[i - 1] is not None and not pd.isna(dists[i]) and not pd.isna(dists[i - 1]):
+            diff_m = float(dists[i] - dists[i - 1])
+            if 0.0 <= diff_m < 2000.0:
+                step_m = diff_m
+        if step_m is None:
+            step_m = haversine_km(lats[i - 1], lons[i - 1], lats[i], lons[i]) * 1000.0
+        spd = step_m / dt
+        if spd <= 30.0:
+            raw_speeds[i] = spd
+
+    smooth_speeds = pd.Series(raw_speeds).rolling(window=3, min_periods=1, center=True).mean().values
 
     # パワーデータが十分に存在するか判定
     valid_power_count = sum(1 for p in powers if p is not None and not pd.isna(p) and float(p) >= cfg.min_power_watts)
@@ -614,31 +635,16 @@ def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAUL
 
     weighted_tailwind_sum = 0.0
     total_weight = 0.0
-    prev_speed_mps = None
+    valid_segments = 0
 
     for i in range(1, len(merged)):
-        dt = float(ts_sec.iloc[i] - ts_sec.iloc[i - 1])
-        if dt <= 0 or dt > 10.0:
-            prev_speed_mps = None
+        dt = float(dt_array[i])
+        if dt <= 0.0 or dt > 15.0:
             continue
 
-        # 移動距離の算出（distanceフィールド優先、欠損時はGPS座標から算出）
-        step_m = None
-        if dists[i] is not None and dists[i - 1] is not None and not pd.isna(dists[i]) and not pd.isna(dists[i - 1]):
-            diff_m = float(dists[i] - dists[i - 1])
-            if 0.0 <= diff_m < 2000.0:
-                step_m = diff_m
-        if step_m is None:
-            step_m = haversine_km(lats[i - 1], lons[i - 1], lats[i], lons[i]) * 1000.0
-
-        speed_mps = step_m / dt
-        if speed_mps > 30.0:
-            # GPS飛び異常値を除外
-            prev_speed_mps = None
-            continue
-
-        accel_mps2 = (speed_mps - prev_speed_mps) / dt if prev_speed_mps is not None else 0.0
-        prev_speed_mps = speed_mps
+        speed_mps = float(smooth_speeds[i])
+        prev_speed_mps = float(smooth_speeds[i - 1])
+        accel_mps2 = (speed_mps - prev_speed_mps) / dt
 
         # アプローチ③: 停止・低速区間および急加減速スパイクを除外
         if speed_mps < min_speed_mps:
@@ -667,8 +673,10 @@ def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAUL
 
         weighted_tailwind_sum += effective_tailwind_mps * weight
         total_weight += weight
+        valid_segments += 1
 
     if total_weight <= 0.0:
+        print("[WindScore] 有効な巡航区間が見つからなかったためデフォルト50点を返します。")
         return 50
 
     avg_tailwind_mps = weighted_tailwind_sum / total_weight
@@ -677,8 +685,14 @@ def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAUL
     exponent = -cfg.score_steepness * (avg_tailwind_mps - cfg.score_center_wind_mps)
     exponent = max(-60.0, min(60.0, exponent))
     score = 100.0 / (1.0 + math.exp(exponent))
+    final_score = max(0, min(100, int(round(score))))
 
-    return max(0, min(100, int(round(score))))
+    print(
+        f"[WindScore] 有効区間: {valid_segments}/{len(merged)-1}, "
+        f"重み付け: {'Power' if use_power_weight else 'Speed^2'}, "
+        f"平均実効追い風: {avg_tailwind_mps:+.2f} m/s -> スコア: {final_score}点"
+    )
+    return final_score
 
 
 # --- 4-B. 6種類の風区分円グラフSVG生成 ---
