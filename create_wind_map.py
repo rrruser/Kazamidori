@@ -48,6 +48,10 @@ def haversine_km(lat1, lon1, lat2, lon2):
     return 2 * r * math.atan2(math.sqrt(a), math.sqrt(1 - a))
 
 
+def _local_tag_name(tag):
+    return tag.split('}', 1)[-1] if '}' in tag else tag
+
+
 # --- 1-A. TCX (XML) ファイルのダイレクト抽出 ---
 def parse_tcx_data(file_path):
     records = []
@@ -107,6 +111,90 @@ def parse_tcx_data(file_path):
                         continue
     except Exception as e:
         print(f"[TCX Parse Error] {e}")
+
+    return records
+
+
+# --- 1-A2. GPX (XML) ファイルのダイレクト抽出 ---
+def parse_gpx_data(file_path):
+    records = []
+    try:
+        tree = ET.parse(file_path)
+        root = tree.getroot()
+
+        trkpts = [elem for elem in root.iter() if _local_tag_name(elem.tag) == 'trkpt']
+        if not trkpts:
+            trkpts = [elem for elem in root.iter() if _local_tag_name(elem.tag) == 'rtept']
+
+        for pt in trkpts:
+            lat_str = pt.attrib.get('lat')
+            lon_str = pt.attrib.get('lon')
+            if not lat_str or not lon_str:
+                continue
+
+            try:
+                lat = float(lat_str)
+                lon = float(lon_str)
+                if not (-90.0 <= lat <= 90.0 and -180.0 <= lon <= 180.0):
+                    continue
+
+                dt_utc = None
+                alt = None
+                dist = None
+                power = None
+
+                for child in pt.iter():
+                    if child is pt:
+                        continue
+                    tag_name = _local_tag_name(child.tag).lower()
+                    text_val = child.text.strip() if child.text else ''
+                    if not text_val:
+                        continue
+
+                    if tag_name == 'time' and dt_utc is None:
+                        try:
+                            ts_str = text_val.replace('Z', '+00:00')
+                            parsed_dt = datetime.datetime.fromisoformat(ts_str)
+                            if parsed_dt.tzinfo is None:
+                                parsed_dt = parsed_dt.replace(tzinfo=datetime.timezone.utc)
+                            dt_utc = parsed_dt
+                        except ValueError:
+                            pass
+                    elif tag_name == 'ele' and alt is None:
+                        try:
+                            cand_alt = float(text_val)
+                            if -500.0 <= cand_alt <= 9000.0:
+                                alt = cand_alt
+                        except ValueError:
+                            pass
+                    elif tag_name in ('power', 'watts') and power is None:
+                        try:
+                            cand_pwr = float(text_val)
+                            if 0.0 <= cand_pwr < 3000.0:
+                                power = cand_pwr
+                        except ValueError:
+                            pass
+                    elif tag_name == 'distance' and dist is None:
+                        try:
+                            cand_dist = float(text_val)
+                            if cand_dist >= 0.0:
+                                dist = cand_dist
+                        except ValueError:
+                            pass
+
+                if dt_utc is not None:
+                    records.append({
+                        'timestamp': dt_utc,
+                        'lat': lat,
+                        'lon': lon,
+                        'altitude': alt,
+                        'distance': dist,
+                        'power': power
+                    })
+            except Exception:
+                continue
+    except Exception as e:
+        print(f"[GPX Parse Error] {e}")
 
     return records
 
@@ -330,18 +418,39 @@ def parse_fit_data(file_path):
 
 
 # --- 1-C. ファイル種別の自動判別と全データ統計算出 ---
-def load_activity_data(file_path):
-    is_tcx = file_path.lower().endswith('.tcx')
-    if not is_tcx:
-        try:
-            with open(file_path, 'rb') as f:
-                head = f.read(100).strip()
-                if head.startswith(b'<') or b'xml' in head.lower() or b'trainingcenterdatabase' in head.lower():
-                    is_tcx = True
-        except Exception:
-            pass
+def detect_activity_format(file_path):
+    lower_path = file_path.lower()
+    if lower_path.endswith('.gpx'):
+        return 'gpx'
+    if lower_path.endswith('.tcx'):
+        return 'tcx'
+    if lower_path.endswith('.fit'):
+        return 'fit'
 
-    if is_tcx:
+    try:
+        with open(file_path, 'rb') as f:
+            head = f.read(512).strip().lower()
+        if b'<gpx' in head:
+            return 'gpx'
+        if b'trainingcenterdatabase' in head or b'<tcx' in head:
+            return 'tcx'
+        if head.startswith(b'<') or b'<?xml' in head:
+            with open(file_path, 'rb') as f:
+                head_more = f.read(4096).lower()
+            if b'<gpx' in head_more:
+                return 'gpx'
+            return 'tcx'
+    except Exception:
+        pass
+
+    return 'fit'
+
+
+def load_activity_data(file_path):
+    fmt = detect_activity_format(file_path)
+    if fmt == 'gpx':
+        records = parse_gpx_data(file_path)
+    elif fmt == 'tcx':
         records = parse_tcx_data(file_path)
     else:
         records = parse_fit_data(file_path)
