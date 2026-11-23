@@ -2,6 +2,7 @@ import json
 import math
 import struct
 import datetime
+from dataclasses import dataclass
 import requests
 import urllib3
 import xml.etree.ElementTree as ET
@@ -10,6 +11,32 @@ import folium
 
 # SSL検証無効化時の警告表示を抑止
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+
+# --- 採点ロジック用パラメータ設定 ---
+@dataclass
+class WindScoreConfig:
+    # アプローチ②: 基準CdAと地上10m風速→走行高さ(約1m)の実効風換算
+    cda_base: float = 0.26              # 基準空気抵抗係数面積 [m^2]（従来の0.30〜0.32から下方修正）
+    cda_reference: float = 0.30         # 標準基準CdA [m^2]
+    height_attenuation: float = 0.86    # 地上10m風速から路面付近(約1m)への風速減衰率
+
+    # アプローチ③: 巡航区間フィルタリング＆重み付け
+    min_cruise_speed_kmh: float = 15.0  # 停止・低速除外のしきい値 [km/h]
+    max_abs_accel_mps2: float = 0.8     # 急加減速スパイク除外のしきい値 [m/s^2]
+    min_power_watts: float = 30.0       # パワー有効判定の最小値 [W]
+
+    # アプローチ①: スコア換算式の50点基準シフト（シグモイド関数）
+    score_center_wind_mps: float = 0.85 # 50点になる地上実効追い風 [m/s]（気象10m風速で約+1.1m/s相当）
+    score_steepness: float = 0.85       # スコア曲線の傾き（大きいほど追い風・向かい風の点差が明確になる）
+
+    @property
+    def effective_wind_factor(self) -> float:
+        """地上高さ減衰と基準CdA比を組み合わせた実効風速スケール係数"""
+        return self.height_attenuation * (self.cda_base / self.cda_reference)
+
+
+DEFAULT_SCORE_CONFIG = WindScoreConfig()
 
 
 def haversine_km(lat1, lon1, lat2, lon2):
@@ -326,7 +353,8 @@ def load_activity_data(file_path):
         'np_watts': None,
         'mid_lat': None,
         'mid_lon': None,
-        'mid_time': None
+        'mid_time': None,
+        'full_df': None,  # 全レコード採点用に保持
     }
 
     if not full_df.empty:
@@ -404,6 +432,9 @@ def load_activity_data(file_path):
                 np_val = float(((rolling_30s ** 4).mean()) ** 0.25)
                 if not pd.isna(np_val) and np_val > 0:
                     stats['np_watts'] = int(round(np_val))
+
+        # 全レコードを採点用に保持
+        stats['full_df'] = full_df.copy()
 
         # 矢印描画用のダウンサンプリング
         total_count = len(full_df)
@@ -540,6 +571,114 @@ def get_relative_wind_info(wind_dir, wind_speed_ms, heading):
         return "#2E7D32", "#2E7D32", "#FFFFFF", effective_headwind, "追い風"
     else:
         return "#1976D2", "#1976D2", "#FFFFFF", effective_headwind, "強追い風"
+
+
+# --- 4-A. 巡航区間フィルタリング＆重み付けによる風恩恵得点算出 ---
+def calculate_wind_benefit_score(full_df, wind_df, cfg: WindScoreConfig = DEFAULT_SCORE_CONFIG) -> int:
+    """
+    全走行レコード(full_df)と気象データ(wind_df)から、以下の3アプローチで風恩恵得点を算出する。
+      1. 50点基準の追い風側シフト（シグモイド換算）
+      2. 基準CdA(0.26)および地上高さ減衰による実効追い風スケーリング
+      3. 停止・低速・急加減速を除外した巡航区間抽出＋パワー(または速度2乗)重み付け
+    """
+    if full_df is None or len(full_df) < 3 or wind_df is None or wind_df.empty:
+        return 50
+
+    work_df = full_df.copy()
+    work_df['timestamp'] = pd.to_datetime(work_df['timestamp']).astype('datetime64[s, Asia/Tokyo]')
+    w_df = wind_df.copy()
+    w_df['time'] = pd.to_datetime(w_df['time']).astype('datetime64[s, Asia/Tokyo]')
+
+    merged = pd.merge_asof(
+        work_df.sort_values('timestamp'),
+        w_df.sort_values('time'),
+        left_on='timestamp',
+        right_on='time',
+        direction='nearest'
+    )
+
+    lats = merged['lat'].values
+    lons = merged['lon'].values
+    ts_sec = merged['timestamp'].astype('int64') // 10**9
+    dists = merged['distance'].values if 'distance' in merged.columns else [None] * len(merged)
+    powers = merged['power'].values if 'power' in merged.columns else [None] * len(merged)
+    wind_speeds = merged['wind_speed'].fillna(0.0).values
+    wind_dirs = merged['wind_dir'].fillna(0.0).values
+
+    # パワーデータが十分に存在するか判定
+    valid_power_count = sum(1 for p in powers if p is not None and not pd.isna(p) and float(p) >= cfg.min_power_watts)
+    use_power_weight = valid_power_count >= max(10, int(len(merged) * 0.2))
+
+    min_speed_mps = cfg.min_cruise_speed_kmh / 3.6
+    wind_scale = cfg.effective_wind_factor
+
+    weighted_tailwind_sum = 0.0
+    total_weight = 0.0
+    prev_speed_mps = None
+
+    for i in range(1, len(merged)):
+        dt = float(ts_sec.iloc[i] - ts_sec.iloc[i - 1])
+        if dt <= 0 or dt > 10.0:
+            prev_speed_mps = None
+            continue
+
+        # 移動距離の算出（distanceフィールド優先、欠損時はGPS座標から算出）
+        step_m = None
+        if dists[i] is not None and dists[i - 1] is not None and not pd.isna(dists[i]) and not pd.isna(dists[i - 1]):
+            diff_m = float(dists[i] - dists[i - 1])
+            if 0.0 <= diff_m < 2000.0:
+                step_m = diff_m
+        if step_m is None:
+            step_m = haversine_km(lats[i - 1], lons[i - 1], lats[i], lons[i]) * 1000.0
+
+        speed_mps = step_m / dt
+        if speed_mps > 30.0:
+            # GPS飛び異常値を除外
+            prev_speed_mps = None
+            continue
+
+        accel_mps2 = (speed_mps - prev_speed_mps) / dt if prev_speed_mps is not None else 0.0
+        prev_speed_mps = speed_mps
+
+        # アプローチ③: 停止・低速区間および急加減速スパイクを除外
+        if speed_mps < min_speed_mps:
+            continue
+        if abs(accel_mps2) > cfg.max_abs_accel_mps2:
+            continue
+
+        pwr_val = float(powers[i]) if (powers[i] is not None and not pd.isna(powers[i])) else 0.0
+        if use_power_weight and pwr_val < cfg.min_power_watts:
+            # 惰性下り坂・ペダリング停止区間を除外
+            continue
+
+        # 進行方位と実効追い風成分（追い風を正）
+        heading = calculate_bearing(lats[i - 1], lons[i - 1], lats[i], lons[i])
+        angle_diff = math.radians(float(wind_dirs[i]) - heading)
+        raw_tailwind_mps = -float(wind_speeds[i]) * math.cos(angle_diff)
+
+        # アプローチ②: 基準CdA(0.26)および路面付近風速換算を適用
+        effective_tailwind_mps = raw_tailwind_mps * wind_scale
+
+        # アプローチ③: 出力パワーまたは速度の2乗で重み付け
+        if use_power_weight:
+            weight = pwr_val * dt
+        else:
+            weight = (speed_mps ** 2) * dt
+
+        weighted_tailwind_sum += effective_tailwind_mps * weight
+        total_weight += weight
+
+    if total_weight <= 0.0:
+        return 50
+
+    avg_tailwind_mps = weighted_tailwind_sum / total_weight
+
+    # アプローチ①: 50点基準を追い風側にシフトしたシグモイド関数でスコア化
+    exponent = -cfg.score_steepness * (avg_tailwind_mps - cfg.score_center_wind_mps)
+    exponent = max(-60.0, min(60.0, exponent))
+    score = 100.0 / (1.0 + math.exp(exponent))
+
+    return max(0, min(100, int(round(score))))
 
 
 # --- 4-B. 6種類の風区分円グラフSVG生成 ---
@@ -767,12 +906,8 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
     max_wind = clean_speeds.max() if not clean_speeds.empty else 0.0
     max_headwind = max(eff_headwinds) if eff_headwinds else 0.0
 
-    head_pct = ((cat_counts["強向かい風"] + cat_counts["弱向かい風"]) / total_segments) * 100
-    cross_pct = (cat_counts["横風/微風"] / total_segments) * 100
-    tail_pct = ((cat_counts["弱追い風"] + cat_counts["追い風"] + cat_counts["強追い風"]) / total_segments) * 100
-
-    wind_score = int(round(head_pct * 0.125 + cross_pct * 0.5 + tail_pct * 1.05))
-    wind_score = max(0, min(100, wind_score))
+    # --- 3アプローチ統合版の風恩恵得点算出 ---
+    wind_score = calculate_wind_benefit_score(stats.get('full_df'), wind_df, DEFAULT_SCORE_CONFIG)
 
     if wind_score >= 80:
         score_color = "#2E7D32"
