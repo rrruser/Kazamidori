@@ -1242,15 +1242,15 @@ def create_wind_map(fit_path, output_html="wind_map.html"):
         <button id="layout-toggle-btn" onclick="toggleLayout()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📐 レイアウト: 標準</button>
         <button id="save-png-btn" onclick="saveAsPNG()" style="background-color: #1a252f; color: white; border: 2px solid white; padding: 5px 10px; border-radius: 6px; font-weight: bold; font-size: 11px; cursor: pointer; box-shadow: 0 2px 6px rgba(0,0,0,0.4); font-family: sans-serif; min-width: 110px; text-align: center;">📷 PNG保存</button>
         <button id="np-toggle-btn" onclick="toggleNP()" style="background-color: #334155; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">⚡ NP: 表示</button>
-        <button id="score-size-toggle-btn" onclick="toggleScoreSize()" style="background-color: #334155; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">🏆 得点表示: 標準</button>
+        <button id="score-size-toggle-btn" onclick="toggleScoreSize()" style="background-color: #0f766e; color: #f8fafc; border: 1.5px solid white; padding: 2px 8px; border-radius: 5px; font-weight: bold; font-size: 10px; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.35); font-family: sans-serif; text-align: center;">🏆 得点表示: 拡大</button>
     </div>
 
     <script>
-    document.body.classList.add('mode-0');
+    document.body.classList.add('mode-0', 'big-score');
     let currentMode = 0;
     const modeNames = ['標準', '右側集約', '表示なし'];
     let showNP = true;
-    let isBigScore = false;
+    let isBigScore = true;
 
     function toggleLayout() {{
         document.body.classList.remove('mode-' + currentMode);
